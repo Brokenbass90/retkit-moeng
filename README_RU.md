@@ -1,12 +1,15 @@
 # RetKit × MoEngage
 
+> Текущая упакованная версия: **v0.5.9**.
+
+
 RetKit это браузерная надстройка для работы с HTML-письмами прямо внутри MoEngage.
 
 MoEngage остаётся источником письма и отправляет кампанию как обычно. RetKit просто делает разработку удобнее: открывает нормальное полноэкранное окно с кодом, большим предпросмотром, переходом из превью прямо к нужному месту HTML, поиском/заменой, сворачиванием блоков, историей состояний и валидатором.
 
 ![Рабочее окно RetKit](docs/screenshots/retkit-workspace.png)
 
-## Что есть в v0.4.2
+## Что есть в v0.4.0
 
 - Полноэкранный редактор HTML.
 - Автоматическое форматирование кода для удобного чтения.
@@ -15,7 +18,7 @@ MoEngage остаётся источником письма и отправля�
 - Разделитель между кодом и превью можно тянуть мышкой.
 - Иконки desktop/mobile находятся в самом окне Preview.
 - Клик по элементу справа переносит к его коду слева.
-- Для текста вида `обычный текст <b>жирный</b> обычный текст`: клик по обычному тексту выделяет содержимое всего `<p>` вместе с `<b>`, а клик по жирному выделяет только сам жирный текст.
+- Нормальная работа с текстом вида `обычный текст <b>жирный</b> обычный текст`.
 - Учитываются повторяющиеся картинки и одинаковые ссылки.
 - `Cmd+F` / `Ctrl+F`: поиск и замена.
 - Replace и Replace All.
@@ -47,7 +50,7 @@ Arc умеет ставить расширения Chrome, поэтому отд
 
 После публикации репозитория можно будет просто открыть raw-файл:
 
-`https://raw.githubusercontent.com/Brokenbass90/retkit-moengage/main/dist/retkit-moengage.user.js`
+`https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js`
 
 Tampermonkey сам покажет окно установки.
 
@@ -157,7 +160,7 @@ Windows:
 Это локальная страховка от случайно удалённого куска письма.
 
 - Нажми **Save** → текущее состояние сохранится.
-- Нажми **History ▾** → увидишь до 10 последних состояний этого письма.
+- Нажми **History** → увидишь до 10 последних состояний этого письма.
 - Нажми на нужное состояние → RetKit его восстановит.
 - Перед восстановлением RetKit автоматически сохранит текущее состояние как **Before restore**.
 
@@ -196,13 +199,13 @@ Email-специфика учитывается:
 В скрипте прописаны:
 
 ```text
-@updateURL   https://raw.githubusercontent.com/Brokenbass90/retkit-moengage/main/dist/retkit-moengage.user.js
-@downloadURL https://raw.githubusercontent.com/Brokenbass90/retkit-moengage/main/dist/retkit-moengage.user.js
+@updateURL   https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
+@downloadURL https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
 ```
 
-Когда репозиторий `Brokenbass90/retkit-moengage` будет опубликован, Tampermonkey сможет сам проверять этот файл и накатывать новую версию.
+Когда репозиторий `Brokenbass90/retkit-moeng` будет опубликован, Tampermonkey сможет сам проверять этот файл и накатывать новую версию.
 
-Номер текущей версии видно прямо в верхней панели RetKit: `v0.4.2`.
+Номер текущей версии видно прямо в верхней панели RetKit: `v0.4.0`.
 
 ## Если что-то не работает
 

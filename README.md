@@ -1,5 +1,8 @@
 # RetKit × MoEngage
 
+> Current packaged build: **v0.5.9**.
+
+
 A browser-side productivity layer for editing HTML emails inside MoEngage.
 
 RetKit keeps MoEngage as the source of truth, but replaces the cramped code-editing experience with a fullscreen HTML workspace, live rendered preview, click-to-source navigation, search/replace, folding, snapshots, and lightweight email-aware validation.
@@ -14,14 +17,14 @@ MoEngage can send the email, personalize it, and render its preview, but editing
 
 RetKit runs only in your browser through Tampermonkey. It does not send email/customer data to an external service.
 
-## v0.4.2 features
+## v0.4.0 features
 
 - Fullscreen HTML editor using MoEngage's own CodeMirror runtime.
 - Beautified working copy with line numbers and optional line wrapping.
 - Draggable code/preview split.
 - Desktop and mobile preview icons inside the preview pane.
 - Click an element in preview to jump to its current HTML source.
-- Mixed-copy mapping: clicking normal text in `text <b>bold</b> text` selects the whole paragraph content including inline markup; clicking the bold copy selects only the bold text.
+- Precise text-node mapping for mixed copy such as `text <b>bold</b> text`.
 - Duplicate-aware mapping for repeated image URLs and links.
 - `Cmd+F` / `Ctrl+F` Find + Replace.
 - Replace current / Replace all.
@@ -49,7 +52,7 @@ Arc uses Chromium extensions, so Tampermonkey is installed from the Chrome Web S
 
 When this repository is public, you can also open the raw userscript directly and let Tampermonkey install it:
 
-`https://raw.githubusercontent.com/Brokenbass90/retkit-moengage/main/dist/retkit-moengage.user.js`
+`https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js`
 
 ## Install on Google Chrome
 
@@ -151,7 +154,7 @@ If automatic apply fails, use **Apply now**. The status text in the toolbar repo
 RetKit keeps snapshots in the current browser profile only.
 
 - **Save** — stores the current HTML manually.
-- **History ▾** — opens up to the last 10 snapshots for this email.
+- **History** — opens up to the last 10 snapshots for this email.
 - Click a snapshot to restore it.
 - Before restore, RetKit automatically saves the current state as **Before restore**.
 
@@ -190,8 +193,8 @@ The validator is intentionally lightweight. It is a production-safety helper, no
 The userscript contains:
 
 ```text
-@updateURL   https://raw.githubusercontent.com/Brokenbass90/retkit-moengage/main/dist/retkit-moengage.user.js
-@downloadURL https://raw.githubusercontent.com/Brokenbass90/retkit-moengage/main/dist/retkit-moengage.user.js
+@updateURL   https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
+@downloadURL https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
 ```
 
 After the public repository exists, Tampermonkey can check this URL and install newer versions. The exact update schedule depends on Tampermonkey settings.

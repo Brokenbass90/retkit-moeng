@@ -1,17 +1,17 @@
 # Changelog
 
-## 0.4.2 - 2026-09-16
+## 0.5.9 — 2026-09-16
 
-- Mixed-copy click mapping: clicking normal text inside a paragraph that contains inline markup selects the whole paragraph content including `<b>`/other inline tags.
-- Clicking directly on bold text still selects only the bold copy.
-- `History` now shows a dropdown marker (`History ▾`) so saved snapshots are easier to discover.
+- Hardened native Test Campaign dropdown activation for MoEngage MDS controls.
+- Improved Test Campaign control matching by geometry to avoid confusing Locales and Send via.
+- Added regression coverage for dropdown activation and adjacent-control selection.
 
-## 0.4.1 - 2026-09-16
+## 0.5.8 — 2026-09-16
 
-- Fixed preview-to-source mapping after responsive reflow/resizing.
-- Text-node hit testing now uses live DOM ranges and global text occurrence before brittle tag ordinals.
+- Improved subject discovery and native Test Campaign locale planning.
+- Added EN/Default locale alias handling for native test sends.
 
-## 0.4.0 - 2026-09-16
+## 0.4.0 — 2026-09-16
 
 - Moved RetKit for MoEngage into a standalone repository-ready project.
 - Added exact text-node mapping for mixed inline copy.

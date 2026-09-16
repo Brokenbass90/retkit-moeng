@@ -1,19 +1,12 @@
 {
   "name": "retkit-moengage",
-  "version": "0.4.2",
+  "version": "0.5.9",
   "private": false,
-  "description": "A Tampermonkey productivity layer for MoEngage email HTML editing.",
+  "description": "RetKit browser workspace for MoEngage email HTML editing, locale switching, RTL fixes and native Test Campaign workflows.",
   "license": "MIT",
   "scripts": {
-    "test": "node tests/test-retkit-moengage-userscript.mjs",
-    "check": "node --check src/retkit-moengage.user.js && npm test && cmp src/retkit-moengage.user.js dist/retkit-moengage.user.js"
-  },
-  "keywords": [
-    "moengage",
-    "email-development",
-    "tampermonkey",
-    "userscript",
-    "codemirror",
-    "html-email"
-  ]
+    "build": "node scripts/build.mjs",
+    "test": "node tests/test-core-regressions.mjs && node tests/test-core-v053.mjs && node tests/test-v050.mjs && node tests/test-v051.mjs && node tests/test-v052.mjs && node tests/test-v053.mjs && node tests/test-dist-v053.mjs && node tests/test-v054.mjs && node tests/test-v055.mjs && node tests/test-v057.mjs dist/retkit-moengage.user.js && node tests/test-v058.mjs dist/retkit-moengage.user.js && node tests/test-v059.mjs dist/retkit-moengage.user.js",
+    "check": "npm run build && node --check src/retkit-moengage.user.js && node --check src/retkit-moengage-v0.5.user.js && node --check src/core/retkit-moengage-core.user.js && node --check dist/retkit-moengage.user.js && npm test"
+  }
 }

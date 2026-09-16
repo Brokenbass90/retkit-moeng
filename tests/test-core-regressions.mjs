@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const file = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/retkit-moengage.user.js');
+const file = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/core/retkit-moengage-core.user.js');
 const userscriptSource = fs.readFileSync(file, 'utf8');
 await import(pathToFileURL(file).href + `?t=${Date.now()}`);
 
@@ -383,11 +383,11 @@ console.log('✓ retkit-moengage userscript core');
 }
 
 {
-  assert.match(userscriptSource, /@version\s+0\.4\.2/);
-  assert.match(userscriptSource, /@namespace\s+https:\/\/github\.com\/Brokenbass90\/retkit-moengage/);
-  assert.match(userscriptSource, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/Brokenbass90\/retkit-moengage\/main\/dist\/retkit-moengage\.user\.js/);
-  assert.match(userscriptSource, /v0\.4\.2/);
-  assert.match(userscriptSource, /makeButton\('Save'/);
+  assert.match(userscriptSource, /@version\s+0\.5\.9/);
+  assert.match(userscriptSource, /@namespace\s+https:\/\/github\.com\/Brokenbass90\/retkit-moeng/);
+  assert.match(userscriptSource, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/Brokenbass90\/retkit-moeng\/main\/dist\/retkit-moengage\.user\.js/);
+  assert.match(userscriptSource, /v0\.5\.4/);
+  assert.doesNotMatch(userscriptSource, /makeButton\('Save'/);
   assert.match(userscriptSource, /makeButton\('History ▾'/);
   assert.doesNotMatch(userscriptSource, /Sync ON|50\/50|makeButton\('Desktop'|makeButton\('Mobile'/);
 }
