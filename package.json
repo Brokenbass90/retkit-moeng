@@ -1,0 +1,19 @@
+{
+  "name": "retkit-moengage",
+  "version": "0.4.2",
+  "private": false,
+  "description": "A Tampermonkey productivity layer for MoEngage email HTML editing.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/test-retkit-moengage-userscript.mjs",
+    "check": "node --check src/retkit-moengage.user.js && npm test && cmp src/retkit-moengage.user.js dist/retkit-moengage.user.js"
+  },
+  "keywords": [
+    "moengage",
+    "email-development",
+    "tampermonkey",
+    "userscript",
+    "codemirror",
+    "html-email"
+  ]
+}
