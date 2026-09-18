@@ -78,7 +78,7 @@ assert.match(bridgeSource, /Email ID \(Non-registered users\)/);
 assert.match(bridgeSource, /function findNativeSubjectInput\(/);
 assert.match(bridgeSource, /document\.getElementById\(IDS\.testPopover\)\?\.contains\?\.\(element\)/);
 assert.match(bridgeSource, /if \(isRetKitElement\(el\) \|\| localeBar/);
-assert.match(bridgeSource, /@version\s+0\.5\.9/);
-assert.match(coreSource, /@version\s+0\.5\.9/);
+assert.match(bridgeSource, /@version\s+0\.6\.31/);
+assert.match(coreSource, /@version\s+0\.6\.31/);
 
 console.log('✓ RetKit v0.5.5 product regressions');

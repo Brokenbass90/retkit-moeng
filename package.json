@@ -1,12 +1,18 @@
 {
   "name": "retkit-moengage",
-  "version": "0.5.9",
+  "version": "0.6.31",
   "private": false,
-  "description": "RetKit browser workspace for MoEngage email HTML editing, locale switching, RTL fixes and native Test Campaign workflows.",
+  "description": "RetKit userscript for faster HTML email work inside MoEngage.",
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node tests/test-core-regressions.mjs && node tests/test-core-v053.mjs && node tests/test-v050.mjs && node tests/test-v051.mjs && node tests/test-v052.mjs && node tests/test-v053.mjs && node tests/test-dist-v053.mjs && node tests/test-v054.mjs && node tests/test-v055.mjs && node tests/test-v057.mjs dist/retkit-moengage.user.js && node tests/test-v058.mjs dist/retkit-moengage.user.js && node tests/test-v059.mjs dist/retkit-moengage.user.js",
-    "check": "npm run build && node --check src/retkit-moengage.user.js && node --check src/retkit-moengage-v0.5.user.js && node --check src/core/retkit-moengage-core.user.js && node --check dist/retkit-moengage.user.js && npm test"
+    "test": "node tests/test-core-regressions.mjs && node tests/test-core-v053.mjs && node tests/test-v050.mjs && node tests/test-v051.mjs && node tests/test-v052.mjs && node tests/test-v053.mjs && node tests/test-dist-v053.mjs && node tests/test-v054.mjs && node tests/test-v055.mjs && node tests/test-v057.mjs dist/retkit-moengage.user.js && node tests/test-v058.mjs dist/retkit-moengage.user.js && node tests/test-v059.mjs dist/retkit-moengage.user.js && node tests/test-v060-browser-core.mjs && node tests/test-v060-ai-panel.mjs && node tests/test-v060-context.mjs && node tests/test-v060-locales.mjs && node tests/test-v060-e2e.mjs && node tests/test-v061-editor-sync.mjs && node tests/test-v061-diagnostics.mjs && node tests/test-v061-preview-readiness.mjs && node tests/test-v061-ai-drawer.mjs && node tests/test-v061-locales.mjs && node tests/test-v063-multilocale.mjs && node tests/test-v064-ui-performance.mjs && node tests/test-v065-editor-responsiveness.mjs && node tests/test-v066-workflow.mjs && node tests/test-v067-bulk-locale-add.mjs && node tests/test-v068-backup-bulk.mjs && node tests/test-v069-live-stability.mjs && node tests/test-v0610-ui-cleanup-locale.mjs && node tests/test-v0611-bulk-undo-native-locale.mjs && node tests/test-v0612-rtl-undo-scroll-remove.mjs && node tests/test-v0613-locale-rtl-sync.mjs && node tests/test-v0614-scan-native-add.mjs && node tests/test-v0615-sync-rtl-stability.mjs && node tests/test-v0616-recovery-runtime.mjs && node tests/test-v0617-stable-freeze.mjs && node tests/test-v0618-dom-repair.mjs && node tests/test-v0619-restore-working.mjs && node tests/test-v0620-rtl-toggle-empty-remove.mjs && node tests/test-v0621-restore-send-rtl.mjs && node tests/test-v0622-hard-rollback.mjs && node tests/test-v0623-test-locale-popup.mjs && node tests/test-v0624-lazy-ai-bridge.mjs && node tests/test-v0625-live-test-rtl.mjs && node tests/test-v0626-hotfix.mjs && node tests/test-v0627-live-react-rtl.mjs && node tests/test-v0628-direct-react-dropdown.mjs && node tests/test-v0629-live-probe-sequence.mjs && node tests/test-v0630-native-trace-replay.mjs && node tests/test-v0631-native-test-handoff.mjs",
+    "check": "npm run build && node --check src/retkit-moengage.user.js && node --check src/retkit-moengage-v0.5.user.js && node --check src/diagnostics/incident-recorder.js && node --check src/core/retkit-moengage-core.user.js && node --check src/ai/shared/protocol.js && node --check src/ai/client/bridge-client.js && node --check src/ai/context/context-adapter.js && node --check src/ai/ui/attachment-dropzone.js && node --check src/ai/ui/diff-view.js && node --check src/ai/ui/chat-view.js && node --check src/ai/ui/ai-panel.js && node --check dist/retkit-moengage.user.js && npm test && npm run bridge:test",
+    "bridge": "npm --prefix bridge start",
+    "bridge:test": "npm --prefix bridge test",
+    "package": "node scripts/package.mjs"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

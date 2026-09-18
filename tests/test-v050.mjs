@@ -67,7 +67,8 @@ assert.equal(
   JSON.stringify({ email: 'qa@example.com', locales: [], personalise: true, sendVia: 'Email ID (Non-registered users)' }),
 );
 
-assert.match(source, /@version\s+0\.5\.9/);
+const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+assert.match(source, new RegExp(`@version\\s+${packageVersion.replace(/\./g, '\\.')}`));
 assert.match(source, /@require\s+https:\/\/raw\.githubusercontent\.com\/Brokenbass90\/retkit-moeng\/main\/src\/retkit-moengage\.user\.js/);
 assert.match(source, /function pruneLegacyToolbarButtons\(/);
 assert.match(source, /\['Save', 'Apply now'\]/);

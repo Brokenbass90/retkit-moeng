@@ -62,7 +62,7 @@ assert.match(bridgeSource, /async function selectExplicitTestLocales\(/);
 assert.doesNotMatch(coreSource, /makeButton\('Save'/);
 assert.doesNotMatch(coreSource, /makeButton\('Apply now'/);
 
-assert.match(bridgeSource, /@version\s+0\.5\.9/);
-assert.match(coreSource, /@version\s+0\.5\.9/);
+assert.match(bridgeSource, /@version\s+0\.6\.31/);
+assert.match(coreSource, /@version\s+0\.6\.31/);
 
 console.log('✓ RetKit v0.5.4 product regressions');

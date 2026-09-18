@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const source = fs.readFileSync(new URL('../src/ai/ui/ai-panel.js', import.meta.url), 'utf8');
+assert.match(source, /stack\.append\(sourceHost, grip, panel\)/, 'AI drawer must live below code');
+assert.match(source, /data-provider-choice="claude"/);
+assert.match(source, /data-provider-choice="codex"/);
+assert.doesNotMatch(source, /data-mode-choice=/);
+assert.match(source, /rk-ai-provider-dot/);
+assert.doesNotMatch(source, /<select id="retkit-ai-provider"/);
+assert.doesNotMatch(source, /<select id="\$\{IDS\.mode\}"/);
+console.log('✓ RetKit v0.6.1 bottom AI drawer UI');

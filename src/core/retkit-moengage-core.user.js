@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.5.9
+// @version      0.6.31
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -482,6 +482,31 @@
     return output;
   }
 
+  function htmlEquivalentForSync(left, right) {
+    const a = String(left ?? '');
+    const b = String(right ?? '');
+    if (a === b) return true;
+    // RetKit edits a beautified working copy while Froala/React can persist the
+    // same email with different structural whitespace. Re-beautify both sides
+    // with the same deterministic formatter before deciding that MoEngage
+    // reverted content. Inline text and opaque style/script/pre blocks are kept.
+    return beautifyEmailHtml(a).replace(/\r\n?/g, '\n').trim() === beautifyEmailHtml(b).replace(/\r\n?/g, '\n').trim();
+  }
+
+  function shouldBlockEmptyNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
+    const local = String(localHtml ?? '').trim();
+    const native = String(nativeHtml ?? '').trim();
+    return !local && Boolean(native);
+  }
+
+  function shouldSkipNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
+    // Dirty only means the overlay changed since the last bookkeeping update.
+    // Cmd/Ctrl+Z can restore the exact native content while dirty stays true.
+    // Never wake Froala/React for a semantic no-op: unnecessary commits are a
+    // major source of controlled-editor reverts in MoEngage.
+    return htmlEquivalentForSync(localHtml, nativeHtml);
+  }
+
   function findAllLiteral(source, query) {
     const input = String(source || '');
     const needle = String(query || '');
@@ -505,42 +530,34 @@
     return { value: input.split(needle).join(String(replacement ?? '')), count };
   }
 
-
-  function snapshotStorageKey(identity) {
-    return `retkit-mo-snapshots:${String(identity || 'unknown')}`;
-  }
-
-  function normalizeSnapshots(list, limit = 10) {
-    const cap = Math.max(1, Number(limit) || 10);
-    return [...(Array.isArray(list) ? list : [])]
-      .filter((item) => item && typeof item.html === 'string')
-      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
-      .slice(0, cap);
-  }
-
-  function readSnapshots(storage, identity) {
-    try {
-      const raw = storage?.getItem?.(snapshotStorageKey(identity));
-      return normalizeSnapshots(raw ? JSON.parse(raw) : [], 10);
-    } catch {
-      return [];
+  function buildLocaleReplacePlan(htmlByLocale, query, replacement, locales = []) {
+    const sourceMap = htmlByLocale && typeof htmlByLocale === 'object' ? htmlByLocale : {};
+    const wanted = Array.isArray(locales) && locales.length ? locales : Object.keys(sourceMap);
+    const seen = new Set();
+    const plan = [];
+    for (const rawLocale of wanted) {
+      const locale = String(rawLocale || '').trim().toUpperCase();
+      if (!locale || seen.has(locale)) continue;
+      seen.add(locale);
+      const before = String(sourceMap[rawLocale] ?? sourceMap[locale] ?? '');
+      const result = replaceAllLiteral(before, query, replacement);
+      plan.push({ locale, count: result.count, changed: result.count > 0, before, after: result.value });
     }
+    return plan;
   }
 
-  function saveSnapshot(storage, identity, html, reason = 'manual', now = Date.now()) {
-    const current = readSnapshots(storage, identity);
-    const stamp = Number(now) || Date.now();
-    const snapshot = {
-      id: `${stamp}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: stamp,
-      label: new Date(stamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      html: String(html || ''),
-      reason: String(reason || 'manual'),
+  function summarizeLocaleReplacePlan(plan = []) {
+    const items = Array.isArray(plan) ? plan : [];
+    const changed = items.filter((item) => Number(item?.count || 0) > 0);
+    return {
+      localeCount: items.length,
+      matchedLocales: changed.length,
+      totalMatches: changed.reduce((sum, item) => sum + Number(item.count || 0), 0),
+      changedLocales: changed.map((item) => String(item.locale || '')),
     };
-    const next = normalizeSnapshots([snapshot, ...current], 10);
-    storage?.setItem?.(snapshotStorageKey(identity), JSON.stringify(next));
-    return next;
   }
+
+
 
   function validateEmailHtml(source) {
     const input = String(source || '');
@@ -560,12 +577,42 @@
     while ((protectedMatch = protectedRe.exec(input))) maskRange(protectedMatch.index, protectedRe.lastIndex);
     const scan = chars.join('');
 
+    // Catch lexically incomplete tags before the structural tag regex runs.
+    // Browsers auto-repair these aggressively, which used to hide typos such
+    // as `<td` or `<img src="...>` from RetKit's validator.
+    for (let start = 0; start < scan.length; start += 1) {
+      if (scan[start] !== '<' || !/^<\/?\s*[a-zA-Z][\w:-]*/.test(scan.slice(start))) continue;
+      let quote = '';
+      let ended = false;
+      for (let cursor = start + 1; cursor < scan.length; cursor += 1) {
+        const char = scan[cursor];
+        if (quote) {
+          if (char === quote) quote = '';
+          continue;
+        }
+        if (char === '"' || char === "'") {
+          quote = char;
+          continue;
+        }
+        if (char === '>') {
+          ended = true;
+          start = cursor;
+          break;
+        }
+        if (char === '<') break;
+      }
+      if (!ended) {
+        if (quote) add('error', 'unclosed-attribute-quote', 'Unclosed quote in HTML attribute', start);
+        else add('error', 'incomplete-tag', 'Incomplete HTML tag (missing >)', start);
+        break;
+      }
+    }
+
     const stack = [];
     const tagRe = /<\/?\s*([a-zA-Z][\w:-]*)\b[^>]*>/g;
     let match;
     while ((match = tagRe.exec(scan))) {
       const raw = input.slice(match.index, match.index + match[0].length);
-      if (/\{[{%]/.test(raw)) continue;
       const tag = match[1].toLowerCase();
       const closing = /^<\//.test(raw);
       const selfClosing = /\/\s*>$/.test(raw) || VOID_TAGS.has(tag);
@@ -581,7 +628,7 @@
         if (tag === 'img') {
           const srcMatch = raw.match(/\bsrc\s*=\s*(["'])(.*?)\1/i);
           const altMatch = raw.match(/\balt\s*=\s*(["'])(.*?)\1/i);
-          if (!srcMatch || !srcMatch[2].trim()) add('error', 'img-src', '<img> is missing src', match.index);
+          if (!srcMatch || !srcMatch[2].trim()) add('warning', 'img-src', '<img> is missing src', match.index);
           if (!altMatch) add('warning', 'img-alt', '<img> is missing alt', match.index);
         }
         if (!selfClosing) stack.push({ tag, index: match.index });
@@ -606,6 +653,10 @@
     }
 
     return issues.sort((a, b) => a.index - b.index || (a.severity === 'error' ? -1 : 1));
+  }
+
+  function hasBlockingPreviewSyntaxIssue(source) {
+    return validateEmailHtml(source).some((issue) => issue.code === 'incomplete-tag' || issue.code === 'unclosed-attribute-quote');
   }
 
   function findFoldRangeForLine(source, lineStart, lineEnd) {
@@ -652,6 +703,48 @@
     return hostname === 'dashboard-02.moengage.com';
   }
 
+  function launcherLifecycleAction(state = {}) {
+    if (state.hasNative && !state.hasLauncher) return 'show';
+    if (!state.hasNative && state.hasLauncher) return 'remove';
+    if (!state.hasNative && state.hasWorkspace && state.routeChanged) return 'close-workspace';
+    return 'keep';
+  }
+
+  function nextEditRevision(current) {
+    const value = Number(current);
+    return (Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0) + 1;
+  }
+
+  function idleSyncDelay() {
+    return 1400;
+  }
+
+  function shouldApplyNativeResult(state = {}) {
+    return Number(state.startedRevision) === Number(state.currentRevision);
+  }
+
+  function shouldPullNativeIntoOverlay(state = {}) {
+    if (state.focused || state.applying || state.composing || state.dirty || state.multiLocaleBusy) return false;
+    return true;
+  }
+
+  function previewReadinessAction(state = {}) {
+    if (!state.native) return { open: false, mode: 'missing-editor' };
+    if (!state.rendered) return { open: true, mode: 'local-fallback' };
+    return { open: true, mode: 'native-preview' };
+  }
+
+  function shouldTreatNativeMismatchAsLateRevert(state = {}) {
+    if (state.sameContent) return false;
+    if (Number(state.lastAppliedRevision) !== Number(state.currentRevision)) return false;
+    const appliedAt = Number(state.lastAppliedAt) || 0;
+    const now = Number(state.now) || 0;
+    const graceMs = Math.max(0, Number(state.graceMs) || 5000);
+    return appliedAt > 0 && now >= appliedAt && (now - appliedAt) <= graceMs;
+  }
+
+  let runtimeState = null;
+
   const core = {
     findSourceIndex,
     findOccurrenceIndex,
@@ -665,17 +758,28 @@
     shouldAcceptRenderedPreview,
     getPreviewDocumentHeight,
     beautifyEmailHtml,
+    htmlEquivalentForSync,
+    shouldSkipNativeCommit,
+    shouldBlockEmptyNativeCommit,
     findAllLiteral,
     replaceAllLiteral,
-    snapshotStorageKey,
-    normalizeSnapshots,
-    readSnapshots,
-    saveSnapshot,
+    buildLocaleReplacePlan,
+    summarizeLocaleReplacePlan,
     validateEmailHtml,
+    hasBlockingPreviewSyntaxIssue,
     findFoldRangeForLine,
     refreshEditorLayout,
     isAllowedHost,
+    launcherLifecycleAction,
+    nextEditRevision,
+    idleSyncDelay,
+    shouldApplyNativeResult,
+    shouldPullNativeIntoOverlay,
+    previewReadinessAction,
+    shouldTreatNativeMismatchAsLateRevert,
     rebindNativeEditorFromMoEngage,
+    commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
+    isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
   };
 
   root.__RetKitMoEngageCore = core;
@@ -693,15 +797,21 @@
     findBar: 'retkit-mo-findbar',
     findInput: 'retkit-mo-find-input',
     replaceInput: 'retkit-mo-replace-input',
+    multiLocaleReplaceInput: 'retkit-mo-multilocale-replace-input',
     matchCount: 'retkit-mo-match-count',
     status: 'retkit-mo-status',
     split: 'retkit-mo-split',
     editorPane: 'retkit-mo-editor-pane',
     previewPane: 'retkit-mo-preview-pane',
     previewCanvas: 'retkit-mo-preview-canvas',
-    historyPopover: 'retkit-mo-history-popover',
     validatorPopover: 'retkit-mo-validator-popover',
     validatorButton: 'retkit-mo-validator-button',
+    validatorInline: 'retkit-mo-validator-inline',
+    multiLocaleDrawer: 'retkit-mo-multilocale-drawer',
+    multiLocaleLoading: 'retkit-mo-multilocale-loading',
+    multiLocaleRows: 'retkit-mo-multilocale-rows',
+    localeManagerRows: 'retkit-mo-locale-manager-rows',
+    localeStrip: 'retkit-mo-locale-strip',
   };
 
   const STATE = {
@@ -713,29 +823,60 @@
     syncingFromNative: false,
     previewHtml: '',
     previewElement: null,
+    previewTimer: null,
+    previewPendingHtml: '',
+    previewLastValidHtml: '',
     awaitingRenderedUpdate: false,
     renderedBeforeEdit: '',
     localPreviewUntil: 0,
     nativeChangeHandler: null,
-    observer: null,
+    launcherTimer: null,
+    launcherRoute: '',
     pollTimer: null,
     syncTimer: null,
     foldTimer: null,
     validatorTimer: null,
     validatorIssues: [],
+    validatorMarks: [],
+    multiLocaleAutoScanTimer: null,
+    multiLocaleRescanPending: false,
     layoutRefreshTimer: null,
     overlayEditor: null,
     nativeEditor: null,
     dirty: false,
     applying: false,
     pendingApply: false,
+    editRevision: 0,
+    lastAppliedRevision: 0,
+    lastAppliedAt: 0,
+    composing: false,
+    overlayFocused: false,
     searchMarks: [],
     foldMarks: new Map(),
+    multiLocalePlan: [],
+    multiLocaleBusy: false,
+    multiLocaleCancelRequested: false,
+    multiLocaleScanError: '',
   };
+  runtimeState = STATE;
+
+  function diagBreadcrumb(type, meta = {}) {
+    try { root.__RetKitDiagnostics?.breadcrumb?.(type, meta); } catch {}
+  }
+
+  function diagIncident(type, message, meta = {}) {
+    try { root.__RetKitDiagnostics?.incident?.(type, message, meta); } catch {}
+  }
 
   function getNativeEditor() {
-    const cm = document.querySelector('.CodeMirror')?.CodeMirror;
-    return cm || null;
+    const workspace = document.getElementById(IDS.workspace);
+    const froala = document.querySelector('.fr-box');
+    if (!froala) return null;
+    for (const node of froala.querySelectorAll('.CodeMirror')) {
+      if (workspace?.contains(node)) continue;
+      if (node?.CodeMirror) return node.CodeMirror;
+    }
+    return null;
   }
 
   function sleep(ms) {
@@ -776,8 +917,9 @@
     return box.querySelector('.fr-element') || box.querySelector('.fr-wrapper');
   }
 
-  async function commitThroughFroala(next) {
-    let native = STATE.nativeEditor || getNativeEditor();
+  async function commitThroughFroala(next, options = {}) {
+    const fast = options.fast === true;
+    let native = getNativeEditor() || STATE.nativeEditor;
     const button = getCodeViewButton();
     if (!native || !button) return { ok: false, reason: 'Froala Code View button not found' };
 
@@ -792,22 +934,22 @@
     try {
       if (isCodeViewActive(button)) {
         button.click();
-        await sleep(260);
+        await sleep(fast ? 120 : 260);
       }
 
       const visualTarget = getFroalaVisualTarget();
       if (visualTarget) {
         visualTarget.focus?.();
         dispatchEditorInput(visualTarget);
-        await sleep(90);
+        await sleep(fast ? 50 : 90);
         visualTarget.blur?.();
       }
       dispatchEditorInput(getFroalaBox());
-      await sleep(160);
+      await sleep(fast ? 80 : 160);
 
       if (!isCodeViewActive(button)) {
         button.click();
-        await sleep(360);
+        await sleep(fast ? 180 : 360);
       }
     } catch (error) {
       return { ok: false, reason: error?.message || String(error) };
@@ -820,10 +962,11 @@
 
     // A controlled React editor may briefly accept the HTML and then restore its
     // previous state. Verify after the render cycle instead of immediately.
-    await sleep(700);
-    const keptOnce = (getNativeEditor() || native).getValue?.() === next;
+    await sleep(fast ? 260 : 700);
+    const keptOnce = htmlEquivalentForSync((getNativeEditor() || native).getValue?.(), next);
+    if (fast) return { ok: Boolean(keptOnce), tentative: true, reason: keptOnce ? '' : 'MoEngage did not keep the native HTML' };
     await sleep(500);
-    const keptTwice = (getNativeEditor() || native).getValue?.() === next;
+    const keptTwice = htmlEquivalentForSync((getNativeEditor() || native).getValue?.(), next);
     const ok = Boolean(keptOnce && keptTwice);
     return { ok, reason: ok ? '' : 'MoEngage reverted the HTML after Froala accepted it' };
   }
@@ -883,6 +1026,34 @@
         font:600 11px/1 inherit; cursor:pointer; }
       .rk-find-mini:hover { background:#1e2b3d; }
       #${IDS.matchCount} { min-width:48px; text-align:center; color:#8fa2b8; font-size:11px; }
+      #${IDS.multiLocaleDrawer} { flex:0 0 auto; width:100%; max-height:min(310px,42vh); overflow:auto; box-sizing:border-box;
+        background:#111823; border-bottom:1px solid #334155; padding:9px 10px; }
+      #${IDS.multiLocaleLoading} { display:block; margin:8px 0 4px; color:#9fb0c5; }
+      #${IDS.multiLocaleLoading} .rk-ml-loading-card { display:block; min-height:34px; padding:7px 9px 8px;
+        border:1px solid #29384a; border-radius:9px; background:#0d151f; font:600 11px/1.25 inherit; }
+      .rk-ml-progress-row { display:flex; align-items:center; gap:8px; min-width:0; }
+      #${IDS.multiLocaleLoading} .rk-ml-spinner { width:11px; height:11px; flex:0 0 11px; border:1.5px solid #34455b; border-top-color:#7794e8; border-radius:50%; animation:rkMlSpin .9s linear infinite; }
+      .rk-ml-progress-text { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .rk-ml-progress-hint { margin-left:auto; color:#71839a; font-weight:500; white-space:nowrap; }
+      .rk-ml-progress-track { height:3px; margin-top:7px; overflow:hidden; border-radius:999px; background:#1c2837; }
+      .rk-ml-progress-bar { height:100%; width:0; border-radius:inherit; background:#4f7cff; transition:width .18s ease; }
+      @keyframes rkMlSpin { to { transform:rotate(360deg); } }
+      .rk-ml-head { display:flex; align-items:center; gap:8px; padding-bottom:8px; border-bottom:1px solid #263140; }
+      .rk-ml-head strong { flex:1; font-size:13px; }
+      .rk-ml-note { color:#8fa2b8; font-size:11px; line-height:1.45; padding:8px 2px; }
+      .rk-ml-actions { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; align-items:center; }
+      .rk-ml-actions .rk-ml-replace-input { flex:1 1 320px; min-width:220px; }
+      #${IDS.multiLocaleRows} { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 0; }
+      .rk-ml-row { display:inline-flex; gap:5px; align-items:center; min-height:30px; padding:4px 8px; border:1px solid #2b394b; border-radius:8px; background:#131d2a; font-size:12px; }
+      .rk-ml-row[data-disabled="1"] { opacity:.46; }
+      .rk-ml-row[data-state="ok"] { color:#91ddb0; }
+      .rk-ml-row[data-state="error"] { color:#ff9097; }
+      .rk-ml-row small { color:#7f91a7; }
+      .rk-ml-section { margin-top:12px; padding-top:10px; border-top:1px solid #263140; }
+      .rk-ml-section-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; margin-bottom:6px; }
+      .rk-ml-section-title span { flex:1; }
+      .rk-ml-locale-chip { display:inline-flex; align-items:center; gap:4px; margin:3px; padding:4px 6px; border:1px solid #334155; border-radius:7px; background:#172130; font-size:11px; }
+      .rk-ml-remove { border:0; background:transparent; color:#ff8d95; cursor:pointer; padding:0 2px; font-size:13px; }
       .rk-search-hit { background:rgba(255,203,79,.22); }
       .rk-search-hit-current { background:rgba(79,124,255,.42); }
       #${IDS.split} { flex:1; min-height:0; display:grid; grid-template-columns:minmax(280px,var(--rk-left,50%)) 6px minmax(320px,1fr); }
@@ -908,6 +1079,7 @@
       #${IDS.sourceHost} .rk-fold-marker:hover { color:#9db1c9; }
       #${IDS.sourceHost} .CodeMirror-foldmarker { color:#8aa2c0; text-shadow:none; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
       #${IDS.sourceHost} .CodeMirror-cursor { border-left-color:#fff; }
+      #${IDS.sourceHost} .rk-html-error-mark { text-decoration:underline wavy #ff6f78 1.5px; text-decoration-skip-ink:none; background:rgba(255,74,87,.08); }
       #${IDS.sourceHost} .CodeMirror-selected { background:#214a91 !important; }
       #${IDS.sourceHost} .cm-tag { color:#ff6f91; }
       #${IDS.sourceHost} .cm-attribute { color:#eec66d; }
@@ -924,10 +1096,9 @@
         z-index:2147483646; background:#111823; border:1px solid #334155; border-radius:10px; box-shadow:0 18px 50px rgba(0,0,0,.4); padding:8px; }
       .rk-popover-head { display:flex; align-items:center; gap:8px; padding:4px 4px 8px; border-bottom:1px solid #263140; margin-bottom:4px; }
       .rk-popover-head strong { flex:1; font-size:13px; }
-      .rk-history-row, .rk-issue-row { width:100%; text-align:left; border:0; border-bottom:1px solid #202b39; background:transparent; color:#dce6f4;
+      .rk-issue-row { width:100%; text-align:left; border:0; border-bottom:1px solid #202b39; background:transparent; color:#dce6f4;
         padding:9px 8px; cursor:pointer; font:12px/1.35 inherit; display:flex; align-items:center; gap:8px; }
-      .rk-history-row:hover, .rk-issue-row:hover { background:#182334; }
-      .rk-history-meta { color:#7f91a7; font-size:11px; margin-left:auto; }
+      .rk-issue-row:hover { background:#182334; }
       .rk-empty { color:#8293a8; padding:14px 8px; font-size:12px; }
       .rk-version { color:#71839a; font-size:11px; font-weight:600; }
       .rk-validator-ok { color:#72d6a0; }
@@ -951,6 +1122,28 @@
     button.title = 'Open RetKit workspace';
     button.addEventListener('click', openWorkspace);
     document.body.appendChild(button);
+  }
+
+  function currentRouteKey() {
+    return `${String(root.location?.pathname || '')}${String(root.location?.search || '')}`;
+  }
+
+  function syncLauncherPresence() {
+    const route = currentRouteKey();
+    const routeChanged = Boolean(STATE.launcherRoute && STATE.launcherRoute !== route);
+    const hasNative = Boolean(getNativeEditor());
+    const launcher = document.getElementById(IDS.launcher);
+    const workspace = document.getElementById(IDS.workspace);
+    const action = launcherLifecycleAction({ hasNative, hasLauncher: Boolean(launcher), hasWorkspace: Boolean(workspace), routeChanged });
+
+    if (action === 'show') ensureLauncher();
+    else if (action === 'remove') launcher?.remove();
+    else if (action === 'close-workspace') {
+      diagBreadcrumb('workspace.route-exit', { from: STATE.launcherRoute, to: route });
+      closeWorkspace();
+      document.getElementById(IDS.launcher)?.remove();
+    }
+    STATE.launcherRoute = route;
   }
 
   function makeButton(text, onClick, options = {}) {
@@ -1024,6 +1217,7 @@
 
   function closeFindBar() {
     document.getElementById(IDS.findBar)?.classList.remove('rk-open');
+    document.getElementById(IDS.multiLocaleDrawer)?.remove();
     clearSearchMarks();
     STATE.overlayEditor?.focus();
   }
@@ -1038,6 +1232,8 @@
     find.focus();
     find.select();
     updateSearchHighlights(find.value, -1);
+    renderMultiLocaleDrawer(true);
+    scheduleMultiLocaleAutoScan(40);
   }
 
   function replaceCurrent() {
@@ -1069,52 +1265,519 @@
     editor.setCursor(cursor);
     updateSearchHighlights(query, -1);
     status(`Replaced ${result.count} occurrence${result.count === 1 ? '' : 's'}`, 'ok');
+    scheduleMultiLocaleAutoScan(120);
+  }
+
+  function captureEditorViewState() {
+    const editor = STATE.overlayEditor;
+    if (!editor) return null;
+    const scroll = typeof editor.getScrollInfo === 'function' ? editor.getScrollInfo() : {};
+    let selections = [];
+    if (typeof editor.listSelections === 'function') {
+      selections = editor.listSelections().map((selection) => ({
+        anchor: { line: Number(selection?.anchor?.line || 0), ch: Number(selection?.anchor?.ch || 0) },
+        head: { line: Number(selection?.head?.line || 0), ch: Number(selection?.head?.ch || 0) },
+      }));
+    } else if (typeof editor.getCursor === 'function') {
+      const from = editor.getCursor('from');
+      const to = editor.getCursor('to');
+      selections = [{ anchor: { line: from.line, ch: from.ch }, head: { line: to.line, ch: to.ch } }];
+    }
+    return {
+      left: Number(scroll.left || 0),
+      top: Number(scroll.top || 0),
+      selections,
+    };
+  }
+
+  function restoreEditorViewState(state) {
+    if (!state) return;
+    const editor = STATE.overlayEditor;
+    if (!editor) return;
+    const applySelection = () => {
+      if (state.selections?.length && typeof editor.setSelections === 'function') editor.setSelections(state.selections);
+      else if (state.selections?.[0] && typeof editor.setSelection === 'function') editor.setSelection(state.selections[0].anchor, state.selections[0].head);
+    };
+    if (typeof editor.operation === 'function') editor.operation(applySelection);
+    else applySelection();
+    if (typeof editor.scrollTo === 'function') editor.scrollTo(state.left || 0, state.top || 0);
+  }
+
+  async function restoreEditorViewStateAfterNativeWork(state) {
+    if (!state) return;
+    await new Promise((resolve) => root.setTimeout(resolve, 0));
+    restoreEditorViewState(state);
+  }
+
+  function multiLocaleBridge() {
+    return root.__RetKitMoEngageBridgeApi || null;
+  }
+
+  function setMultiLocaleLoading(message = '') {
+    const drawer = document.getElementById(IDS.multiLocaleDrawer);
+    let loading = document.getElementById(IDS.multiLocaleLoading);
+    if (!message) { loading?.remove(); return; }
+    if (!drawer) return;
+    if (!loading) {
+      loading = document.createElement('div');
+      loading.id = IDS.multiLocaleLoading;
+      loading.innerHTML = '<div class="rk-ml-loading-card"><div class="rk-ml-progress-row"><span class="rk-ml-spinner" aria-hidden="true"></span><span class="rk-ml-progress-text" data-rk-ml-loading-text></span><span class="rk-ml-progress-hint">Please wait · keep this tab open</span></div><div class="rk-ml-progress-track"><div class="rk-ml-progress-bar" data-rk-ml-progress-bar></div></div></div>';
+      drawer.insertBefore(loading, drawer.children[1] || null);
+    }
+    const text = loading.querySelector('[data-rk-ml-loading-text]');
+    if (text) text.textContent = String(message);
+    const match = String(message).match(/(\d+)\s*\/\s*(\d+)/);
+    const progress = loading.querySelector('[data-rk-ml-progress-bar]');
+    if (progress) {
+      const current = Number(match?.[1] || 0);
+      const total = Number(match?.[2] || 0);
+      progress.style.width = total > 0 ? `${Math.max(0, Math.min(100, (current / total) * 100))}%` : '12%';
+    }
+  }
+
+  function setMultiLocaleBusy(value, message = '') {
+    STATE.multiLocaleBusy = Boolean(value);
+    setMultiLocaleLoading(STATE.multiLocaleBusy ? (message || 'Working across locales…') : '');
+    const drawer = document.getElementById(IDS.multiLocaleDrawer);
+    if (!drawer) return;
+    for (const control of drawer.querySelectorAll('button,input')) control.disabled = STATE.multiLocaleBusy;
+  }
+
+  function requestMultiLocaleCancel() {
+    if (!STATE.multiLocaleBusy) return;
+    STATE.multiLocaleCancelRequested = true;
+    status('Stopping after the current locale…', 'warn');
+  }
+
+  async function restoreMultiLocaleOrigin(origin) {
+    const bridge = multiLocaleBridge();
+    if (!bridge || !origin) return;
+    try { await Promise.resolve(bridge.switchLocale?.(origin, { preferNative: true, rebind: true })); } catch {}
+  }
+
+  function knownMultiLocaleCodesFromUi() {
+    const values = [];
+    const strip = document.getElementById(IDS.localeStrip);
+    if (strip?.dataset?.locales) values.push(...String(strip.dataset.locales).split(','));
+    for (const tab of strip?.querySelectorAll?.('.rk-v052-locale-tab') || []) values.push(String(tab.textContent || ''));
+    return [...new Set(values.map((value) => String(value || '').trim().toUpperCase()).filter(Boolean))];
+  }
+
+  function renderMultiLocalePlanRows() {
+    const host = document.getElementById(IDS.multiLocaleRows);
+    const drawer = document.getElementById(IDS.multiLocaleDrawer);
+    if (!host || !drawer) return;
+    host.replaceChildren();
+    const apply = drawer.querySelector('[data-rk-multilocale-apply]');
+    if (!STATE.multiLocalePlan.length) {
+      const empty = document.createElement('div');
+      empty.className = 'rk-ml-note';
+      if (STATE.multiLocaleBusy) {
+        empty.textContent = 'Scanning locales…';
+      } else if (STATE.multiLocaleScanError) {
+        const message = document.createElement('span');
+        message.textContent = `Locale scan failed: ${STATE.multiLocaleScanError} `;
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'rk-find-mini';
+        retry.textContent = 'Retry';
+        retry.addEventListener('click', () => {
+          STATE.multiLocaleScanError = '';
+          scheduleMultiLocaleAutoScan(0);
+        });
+        empty.append(message, retry);
+      } else {
+        empty.textContent = 'RetKit scans locales automatically.';
+      }
+      host.appendChild(empty);
+      if (apply) { apply.disabled = true; apply.textContent = 'Replace across locales'; }
+      return;
+    }
+    const selectable = STATE.multiLocalePlan.filter((item) => item.count > 0);
+    const all = document.createElement('label');
+    all.className = 'rk-ml-row';
+    const allInput = document.createElement('input');
+    allInput.type = 'checkbox';
+    allInput.dataset.rkLocaleAll = '1';
+    allInput.checked = selectable.length > 0;
+    const allText = document.createElement('strong');
+    const totalMatches = selectable.reduce((sum, item) => sum + Number(item.count || 0), 0);
+    allText.textContent = `All · ${totalMatches}`;
+    all.append(allInput, allText);
+    host.appendChild(all);
+    for (const item of STATE.multiLocalePlan) {
+      const row = document.createElement('label');
+      row.className = 'rk-ml-row';
+      row.dataset.locale = item.locale;
+      if (!item.count) row.dataset.disabled = '1';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.dataset.rkLocaleSelect = item.locale;
+      checkbox.checked = item.count > 0;
+      checkbox.disabled = item.count === 0;
+      const locale = document.createElement('strong');
+      locale.textContent = item.count ? `${item.locale} · ${item.count}` : item.locale;
+      row.title = item.count ? `${item.count} exact match${item.count === 1 ? '' : 'es'}` : 'Not found';
+      row.append(checkbox, locale);
+      host.appendChild(row);
+    }
+    const refreshApply = () => {
+      const selected = [...host.querySelectorAll('[data-rk-locale-select]:checked')];
+      const enabled = [...host.querySelectorAll('[data-rk-locale-select]:not(:disabled)')];
+      allInput.checked = enabled.length > 0 && selected.length === enabled.length;
+      allInput.indeterminate = selected.length > 0 && selected.length < enabled.length;
+      if (apply) {
+        const selectedLocales = new Set(selected.map((input) => input.dataset.rkLocaleSelect));
+        const selectedMatches = STATE.multiLocalePlan
+          .filter((item) => selectedLocales.has(item.locale))
+          .reduce((sum, item) => sum + Number(item.count || 0), 0);
+        apply.disabled = STATE.multiLocaleBusy || selected.length === 0 || selectedMatches === 0;
+        apply.textContent = selected.length
+          ? `Replace ${selectedMatches} match${selectedMatches === 1 ? '' : 'es'} in ${selected.length} locale${selected.length === 1 ? '' : 's'}`
+          : 'Replace across locales';
+      }
+    };
+    allInput.addEventListener('change', () => {
+      for (const input of host.querySelectorAll('[data-rk-locale-select]:not(:disabled)')) input.checked = allInput.checked;
+      refreshApply();
+    });
+    for (const input of host.querySelectorAll('[data-rk-locale-select]')) input.addEventListener('change', refreshApply);
+    refreshApply();
+  }
+
+  function updateMultiLocaleRowState(locale, text, state = '') {
+    const drawer = document.getElementById(IDS.multiLocaleDrawer);
+    const label = drawer?.querySelector(`[data-rk-locale-state="${locale}"]`);
+    const row = label?.closest('.rk-ml-row');
+    if (label) label.textContent = text;
+    if (row) row.dataset.state = state;
+  }
+
+  async function scanMultiLocaleReplace() {
+    if (STATE.multiLocaleBusy) { STATE.multiLocaleRescanPending = true; return; }
+    const bridge = multiLocaleBridge();
+    const find = document.getElementById(IDS.findInput);
+    const replace = document.getElementById(IDS.replaceInput);
+    const query = String(find?.value || '');
+    if (!bridge?.readLocaleHtmlFast || !query) {
+      if (!query) {
+        STATE.multiLocalePlan = [];
+        STATE.multiLocaleScanError = '';
+        renderMultiLocalePlanRows();
+      }
+      return;
+    }
+
+    const replacement = String(replace?.value || '');
+    const viewState = captureEditorViewState();
+    const htmlByLocale = {};
+    let locales = [];
+    let origin = '';
+    STATE.multiLocaleCancelRequested = false;
+    STATE.multiLocaleScanError = '';
+    STATE.multiLocalePlan = [];
+    setMultiLocaleBusy(true, 'Scanning locales…');
+    renderMultiLocalePlanRows();
+
+    try {
+      try {
+        locales = bridge?.listLocales
+          ? [...new Set((await Promise.resolve(bridge.listLocales())) || [])].map(String).filter(Boolean)
+          : [];
+      } catch (error) {
+        diagBreadcrumb('multilocale.scan.locale-list-fallback', { reason: error?.message || String(error) });
+      }
+      if (!locales.length) {
+        locales = knownMultiLocaleCodesFromUi();
+        if (locales.length) diagBreadcrumb('multilocale.scan.locale-list-fallback', { localeCount: locales.length, source: 'known-ui-locales' });
+      }
+      if (!locales.length) throw new Error('No known MoEngage locales are available. Retry the scan below.');
+
+      try { origin = String(await Promise.resolve(bridge.getActiveLocale?.() || '')); } catch {}
+      setMultiLocaleLoading(`Scanning locales 0/${locales.length}…`);
+      status(`Scanning ${locales.length} locales…`, 'neutral');
+      diagBreadcrumb('multilocale.scan.start', { localeCount: locales.length, mode: 'native-fast' });
+
+      for (let index = 0; index < locales.length; index += 1) {
+        const locale = locales[index];
+        setMultiLocaleLoading(`Scanning locales ${index + 1}/${locales.length}…`);
+        htmlByLocale[locale] = String(await Promise.resolve(bridge.readLocaleHtmlFast(locale)) || '');
+      }
+      if (String(document.getElementById(IDS.findInput)?.value || '') !== query) {
+        STATE.multiLocaleRescanPending = true;
+        return;
+      }
+      STATE.multiLocalePlan = buildLocaleReplacePlan(htmlByLocale, query, replacement, locales);
+      renderMultiLocalePlanRows();
+      const summary = summarizeLocaleReplacePlan(STATE.multiLocalePlan);
+      status(`Found ${summary.totalMatches} matches in ${summary.matchedLocales}/${summary.localeCount} locales`, summary.totalMatches ? 'ok' : 'warn');
+      diagBreadcrumb('multilocale.scan.done', { ...summary, mode: 'native-fast' });
+    } catch (error) {
+      STATE.multiLocaleScanError = error?.message || String(error);
+      STATE.multiLocalePlan = [];
+      renderMultiLocalePlanRows();
+      diagIncident('multilocale_scan_failed', STATE.multiLocaleScanError, { localeCount: locales.length });
+      status(`Locale scan failed: ${STATE.multiLocaleScanError}. Retry is available below.`, 'error');
+    } finally {
+      if (origin) await restoreMultiLocaleOrigin(origin);
+      await restoreEditorViewStateAfterNativeWork(viewState);
+      setMultiLocaleBusy(false);
+      renderMultiLocalePlanRows();
+      if (STATE.multiLocaleRescanPending) {
+        STATE.multiLocaleRescanPending = false;
+        scheduleMultiLocaleAutoScan(80);
+      }
+    }
+  }
+
+  function scheduleMultiLocaleAutoScan(delayMs = 260) {
+    clearTimeout(STATE.multiLocaleAutoScanTimer);
+    STATE.multiLocaleAutoScanTimer = setTimeout(() => {
+      STATE.multiLocaleAutoScanTimer = null;
+      const query = String(document.getElementById(IDS.findInput)?.value || '');
+      if (!query) {
+        STATE.multiLocalePlan = [];
+        document.getElementById(IDS.multiLocaleDrawer)?.remove();
+        return;
+      }
+      renderMultiLocaleDrawer(true);
+      if (STATE.multiLocaleBusy) { STATE.multiLocaleRescanPending = true; return; }
+      void scanMultiLocaleReplace().catch((error) => {
+        const message = error?.message || String(error);
+        STATE.multiLocaleScanError = message;
+        STATE.multiLocalePlan = [];
+        setMultiLocaleBusy(false);
+        renderMultiLocalePlanRows();
+        diagIncident('multilocale_scan_failed', message, { source: 'auto-scan-scheduler' });
+        status(`Locale scan failed: ${message}`, 'error');
+      });
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  function selectedMultiLocaleItems() {
+    const drawer = document.getElementById(IDS.multiLocaleDrawer);
+    const selected = new Set([...drawer?.querySelectorAll('[data-rk-locale-select]:checked') || []].map((input) => input.dataset.rkLocaleSelect));
+    return STATE.multiLocalePlan.filter((item) => selected.has(item.locale) && item.count > 0);
+  }
+
+  async function applyMultiLocaleReplace() {
+    if (STATE.multiLocaleBusy) return;
+    const bridge = multiLocaleBridge();
+    if (!bridge?.setLocaleHtmlStable || !bridge?.readLocaleHtmlFast) {
+      status('Stable locale writer is unavailable', 'error');
+      return;
+    }
+    const find = document.getElementById(IDS.findInput);
+    const bulkReplace = document.getElementById(IDS.multiLocaleReplaceInput);
+    const query = String(find?.value || '');
+    const replacement = String(bulkReplace?.value || '');
+    const items = selectedMultiLocaleItems();
+    if (!query || !items.length) {
+      status('Select at least one locale with matches', 'warn');
+      return;
+    }
+    const origin = String(await Promise.resolve(bridge.getActiveLocale?.() || ''));
+    const viewState = captureEditorViewState();
+    const applied = [];
+    setMultiLocaleBusy(true, `Replacing locales 0/${items.length}…`);
+    diagBreadcrumb('multilocale.apply.start', { locales: items.map((item) => item.locale), queryLength: query.length, mode: 'native-hidden-stable' });
+    try {
+      // The scan is only a discovery/selection aid. Before each write, re-read
+      // the current locale HTML so unrelated edits made after the scan are kept.
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        setMultiLocaleLoading(`Replacing locales ${index + 1}/${items.length}…`);
+        updateMultiLocaleRowState(item.locale, `reading ${index + 1}/${items.length}…`);
+        const currentHtml = String(await Promise.resolve(bridge.readLocaleHtmlFast(item.locale)) || '');
+        const result = replaceAllLiteral(currentHtml, query, replacement);
+        if (!result.count) {
+          updateMultiLocaleRowState(item.locale, 'no current matches', 'warn');
+          continue;
+        }
+        updateMultiLocaleRowState(item.locale, `writing ${result.count}…`);
+        const write = await Promise.resolve(bridge.setLocaleHtmlStable(item.locale, result.value));
+        if (!write?.ok) {
+          updateMultiLocaleRowState(item.locale, 'write failed', 'error');
+          throw new Error(write?.reason || `${item.locale}: native write failed`);
+        }
+        applied.push({ locale: item.locale, count: result.count });
+        updateMultiLocaleRowState(item.locale, `✓ ${result.count}`, 'ok');
+      }
+        const totalMatches = applied.reduce((sum, item) => sum + item.count, 0);
+      status(`Replaced ${totalMatches} matches in ${applied.length} locales`, applied.length ? 'ok' : 'warn');
+      diagBreadcrumb('multilocale.apply.done', { localeCount: applied.length, totalMatches, mode: 'native-hidden-stable' });
+      scheduleMultiLocaleAutoScan(120);
+    } catch (error) {
+        diagIncident('multilocale_apply_failed', error?.message || String(error), { appliedLocales: applied.map((item) => item.locale), mode: 'native-hidden-stable' });
+      status(`Bulk replace stopped: ${error?.message || error}`, 'error');
+    } finally {
+      await restoreMultiLocaleOrigin(origin);
+      setMultiLocaleBusy(false);
+      try { multiLocaleBridge()?.refreshUi?.(); } catch {}
+      await restoreEditorViewStateAfterNativeWork(viewState);
+    }
+  }
+
+  async function refreshLocaleManager() {
+    const bridge = multiLocaleBridge();
+    const host = document.getElementById(IDS.localeManagerRows);
+    if (!host || !bridge?.listLocales) return;
+    host.replaceChildren();
+    const loading = document.createElement('div');
+    loading.className = 'rk-ml-note';
+    loading.textContent = 'Reading locales from MoEngage…';
+    host.appendChild(loading);
+    try {
+      const existing = [...new Set((await Promise.resolve(bridge.listLocales())) || [])].map(String);
+      let available = [];
+      try { available = [...new Set((await Promise.resolve(bridge.listAvailableLocales?.())) || [])].map(String); } catch (error) {
+        diagIncident('locale_available_scan_failed', error?.message || String(error), {});
+      }
+      host.replaceChildren();
+      const existingWrap = document.createElement('div');
+      for (const locale of existing) {
+        const chip = document.createElement('span');
+        chip.className = 'rk-ml-locale-chip';
+        chip.append(document.createTextNode(locale));
+        if (!/^(?:EN|DEFAULT)$/i.test(locale)) {
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'rk-ml-remove';
+          remove.textContent = '×';
+          remove.title = `Remove ${locale}`;
+          remove.addEventListener('click', async () => {
+            if (STATE.multiLocaleBusy || root.confirm?.(`Remove locale ${locale} from this MoEngage campaign?`) === false) return;
+            setMultiLocaleBusy(true);
+            try {
+              const result = await Promise.resolve(bridge.removeLocale?.(locale));
+              status(result?.ok ? `Removed ${locale}` : (result?.reason || `Could not remove ${locale}`), result?.ok ? 'ok' : 'error');
+            } finally {
+              setMultiLocaleBusy(false);
+              await refreshLocaleManager();
+            }
+          });
+          chip.appendChild(remove);
+        }
+        existingWrap.appendChild(chip);
+      }
+      host.appendChild(existingWrap);
+      if (available.length) {
+        const hint = document.createElement('div');
+        hint.className = 'rk-ml-note';
+        hint.textContent = 'Available in MoEngage but not created:';
+        host.appendChild(hint);
+        for (const locale of available) {
+          const label = document.createElement('label');
+          label.className = 'rk-ml-locale-chip';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.dataset.rkAddLocale = locale;
+          label.append(checkbox, document.createTextNode(locale));
+          host.appendChild(label);
+        }
+        const add = makeButton('Create selected', async () => {
+          const locales = [...host.querySelectorAll('[data-rk-add-locale]:checked')].map((input) => input.dataset.rkAddLocale);
+          if (!locales.length || STATE.multiLocaleBusy) return;
+          setMultiLocaleBusy(true);
+          try {
+            const result = await Promise.resolve(bridge.addLocales?.(locales));
+            status(result?.ok ? `Created: ${(result.added || []).join(', ')}` : (result?.reason || 'Locale creation failed'), result?.ok ? 'ok' : 'error');
+          } finally {
+            setMultiLocaleBusy(false);
+            await refreshLocaleManager();
+          }
+        });
+        add.classList.add('rk-find-mini');
+        host.appendChild(add);
+      } else {
+        const done = document.createElement('div');
+        done.className = 'rk-ml-note';
+        done.textContent = 'No additional locales are currently offered by MoEngage.';
+        host.appendChild(done);
+      }
+    } catch (error) {
+      host.replaceChildren();
+      const failed = document.createElement('div');
+      failed.className = 'rk-ml-note';
+      failed.textContent = `Could not read locales: ${error?.message || error}`;
+      host.appendChild(failed);
+    }
+  }
+
+  function renderMultiLocaleDrawer(forceOpen = false) {
+    const bar = document.getElementById(IDS.findBar);
+    const query = String(document.getElementById(IDS.findInput)?.value || '');
+    if (!bar || !bar.classList.contains('rk-open') || !query) {
+      document.getElementById(IDS.multiLocaleDrawer)?.remove();
+      return;
+    }
+    let drawer = document.getElementById(IDS.multiLocaleDrawer);
+    if (!drawer) {
+      drawer = document.createElement('div');
+      drawer.id = IDS.multiLocaleDrawer;
+      const head = document.createElement('div');
+      head.className = 'rk-ml-head';
+      const title = document.createElement('strong');
+      title.textContent = 'Across locales';
+      const note = document.createElement('span');
+      note.className = 'rk-ml-note';
+      note.textContent = 'Exact matches only';
+      head.append(title, note);
+      drawer.appendChild(head);
+      const rows = document.createElement('div');
+      rows.id = IDS.multiLocaleRows;
+      drawer.appendChild(rows);
+      const actions = document.createElement('div');
+      actions.className = 'rk-ml-actions';
+      const bulkReplace = document.createElement('input');
+      bulkReplace.id = IDS.multiLocaleReplaceInput;
+      bulkReplace.className = 'rk-find-input rk-ml-replace-input';
+      bulkReplace.placeholder = 'Replace across locales with…';
+      bulkReplace.autocomplete = 'off';
+      const apply = makeButton('Replace across locales', applyMultiLocaleReplace);
+      apply.dataset.rkMultilocaleApply = '1';
+      apply.classList.add('rk-find-mini');
+      apply.disabled = true;
+      actions.append(bulkReplace, apply);
+      drawer.appendChild(actions);
+      bar.insertAdjacentElement('afterend', drawer);
+    }
+    renderMultiLocalePlanRows();
   }
 
   function buildFindBar(editorPane) {
     const bar = document.createElement('div');
     bar.id = IDS.findBar;
-
     const find = document.createElement('input');
     find.id = IDS.findInput;
     find.className = 'rk-find-input';
     find.placeholder = 'Find…';
-
     const replace = document.createElement('input');
     replace.id = IDS.replaceInput;
     replace.className = 'rk-find-input';
     replace.placeholder = 'Replace with…';
-
     const count = document.createElement('span');
     count.id = IDS.matchCount;
     count.textContent = '0/0';
-
     const prev = makeButton('↑', () => findNext(find.value, -1));
     const next = makeButton('↓', () => findNext(find.value, 1));
     const replaceOne = makeButton('Replace', replaceCurrent);
     const replaceAll = makeButton('All', replaceAllMatches);
     const close = makeButton('×', closeFindBar);
     for (const btn of [prev, next, replaceOne, replaceAll, close]) btn.classList.add('rk-find-mini');
-
-    find.addEventListener('input', () => updateSearchHighlights(find.value, -1));
+    find.addEventListener('input', () => {
+      updateSearchHighlights(find.value, -1);
+      renderMultiLocaleDrawer(true);
+      scheduleMultiLocaleAutoScan();
+    });
     find.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        findNext(find.value, event.shiftKey ? -1 : 1);
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeFindBar();
-      }
+      if (event.key === 'Enter') { event.preventDefault(); findNext(find.value, event.shiftKey ? -1 : 1); }
+      if (event.key === 'Escape') { event.preventDefault(); closeFindBar(); }
     });
     replace.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        replaceCurrent();
-      }
+      if (event.key === 'Enter') { event.preventDefault(); replaceCurrent(); }
       if (event.key === 'Escape') closeFindBar();
     });
-
     bar.append(find, replace, count, prev, next, replaceOne, replaceAll, close);
     editorPane.appendChild(bar);
   }
@@ -1136,91 +1799,44 @@
   }
 
   function closeFloatingPopovers(exceptId = '') {
-    for (const id of [IDS.historyPopover, IDS.validatorPopover]) {
+    for (const id of [IDS.validatorPopover]) {
       if (id !== exceptId) document.getElementById(id)?.remove();
     }
-  }
-
-  function manualSaveSnapshot() {
-    const html = STATE.overlayEditor?.getValue() || '';
-    if (!html) return;
-    saveSnapshot(localStorage, getEmailIdentity(), html, 'manual');
-    status('Snapshot saved', 'ok');
-    renderHistoryPopover(true);
-  }
-
-  async function restoreSnapshot(snapshot) {
-    const editor = STATE.overlayEditor;
-    if (!editor || !snapshot?.html) return;
-    saveSnapshot(localStorage, getEmailIdentity(), editor.getValue(), 'before-restore');
-    STATE.syncingFromNative = true;
-    try {
-      editor.setValue(snapshot.html);
-      editor.setCursor({ line: 0, ch: 0 });
-      STATE.dirty = true;
-      applyPreviewHtml(snapshot.html, true);
-      scheduleFoldRefresh();
-    } finally {
-      STATE.syncingFromNative = false;
-    }
-    closeFloatingPopovers();
-    status(`Restoring snapshot ${snapshot.label || ''}…`, 'neutral');
-    await pushOverlayToNative(true);
-  }
-
-  function renderHistoryPopover(forceOpen = false) {
-    const existing = document.getElementById(IDS.historyPopover);
-    if (existing && !forceOpen) {
-      existing.remove();
-      return;
-    }
-    existing?.remove();
-    closeFloatingPopovers(IDS.historyPopover);
-    const pop = document.createElement('div');
-    pop.id = IDS.historyPopover;
-    pop.className = 'rk-popover';
-    const head = document.createElement('div');
-    head.className = 'rk-popover-head';
-    head.innerHTML = '<strong>History</strong><span class="rk-history-meta">last 10 local states</span>';
-    const close = makeButton('×', () => pop.remove());
-    head.appendChild(close);
-    pop.appendChild(head);
-    const snapshots = readSnapshots(localStorage, getEmailIdentity());
-    if (!snapshots.length) {
-      const empty = document.createElement('div');
-      empty.className = 'rk-empty';
-      empty.textContent = 'No snapshots for this email yet.';
-      pop.appendChild(empty);
-    } else {
-      for (const item of snapshots) {
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'rk-history-row';
-        const reason = item.reason === 'before-restore' ? 'Before restore' : 'Manual';
-        row.innerHTML = `<span>${item.label || new Date(item.createdAt).toLocaleTimeString()}</span><span class="rk-history-meta">${reason}</span>`;
-        row.title = 'Restore this snapshot';
-        row.addEventListener('click', () => restoreSnapshot(item));
-        pop.appendChild(row);
-      }
-    }
-    document.body.appendChild(pop);
   }
 
   function updateValidatorStatus() {
     const html = STATE.overlayEditor?.getValue() || '';
     STATE.validatorIssues = validateEmailHtml(html);
     const button = document.getElementById(IDS.validatorButton);
-    if (!button) return;
-    if (!STATE.validatorIssues.length) {
-      button.textContent = '✓ HTML';
-      button.classList.add('rk-validator-ok');
-      button.classList.remove('rk-validator-warn');
-      button.title = 'No structural HTML issues detected';
-    } else {
-      button.textContent = `⚠ ${STATE.validatorIssues.length} issue${STATE.validatorIssues.length === 1 ? '' : 's'}`;
-      button.classList.remove('rk-validator-ok');
-      button.classList.add('rk-validator-warn');
-      button.title = 'Open HTML validation issues';
+    const errors = STATE.validatorIssues.filter((issue) => issue.severity === 'error');
+    const warnings = STATE.validatorIssues.filter((issue) => issue.severity !== 'error');
+    for (const mark of STATE.validatorMarks || []) { try { mark.clear?.(); } catch {} }
+    STATE.validatorMarks = [];
+    const editor = STATE.overlayEditor;
+    if (editor) {
+      const source = editor.getValue();
+      for (const issue of errors.slice(0, 80)) {
+        const start = Math.max(0, Number(issue.index || 0));
+        let end = source.indexOf('>', start);
+        const lineEnd = source.indexOf('\n', start);
+        if (end < 0 || (lineEnd >= 0 && end > lineEnd)) end = lineEnd >= 0 ? lineEnd : Math.min(source.length, start + 24);
+        else end += 1;
+        end = Math.max(start + 1, Math.min(source.length, end));
+        try { STATE.validatorMarks.push(editor.markText(editor.posFromIndex(start), editor.posFromIndex(end), { className: 'rk-html-error-mark', title: `${issue.message} · line ${issue.line}` })); } catch {}
+      }
+    }
+    if (button) {
+      if (!STATE.validatorIssues.length) {
+        button.textContent = '✓ HTML';
+        button.classList.add('rk-validator-ok');
+        button.classList.remove('rk-validator-warn');
+        button.title = 'No structural HTML issues detected';
+      } else {
+        button.textContent = errors.length ? `⛔ HTML ${errors.length}${warnings.length ? ` · ⚠ ${warnings.length}` : ''}` : `⚠ HTML ${warnings.length}`;
+        button.classList.remove('rk-validator-ok');
+        button.classList.add('rk-validator-warn');
+        button.title = errors.length ? 'HTML errors detected' : 'HTML warnings detected';
+      }
     }
     const open = document.getElementById(IDS.validatorPopover);
     if (open) renderValidatorPopover(true);
@@ -1290,45 +1906,39 @@
   function buildToolbar(workspace) {
     const bar = document.createElement('div');
     bar.className = 'rk-topbar';
-
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.5.4</span>';
-
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.6.31</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
       STATE.overlayEditor?.setOption('lineWrapping', STATE.wrap);
       wrapBtn.classList.toggle('rk-active', STATE.wrap);
     }, { active: STATE.wrap });
-
-    const historyBtn = makeButton('History ▾', () => renderHistoryPopover(false), { title: 'Restore one of the last 10 local states' });
     const validatorBtn = makeButton('✓ HTML', () => renderValidatorPopover(false), { title: 'HTML validation' });
     validatorBtn.id = IDS.validatorButton;
     validatorBtn.classList.add('rk-validator-ok');
-
-
     const copyBtn = makeButton('Copy HTML', async () => {
       const value = STATE.overlayEditor?.getValue() || '';
-      try {
-        await navigator.clipboard.writeText(value);
-        status('HTML copied', 'ok');
-      } catch {
-        status('Clipboard permission denied', 'error');
-      }
+      try { await navigator.clipboard.writeText(value); status('HTML copied', 'ok'); }
+      catch { status('Clipboard permission denied', 'error'); }
     });
-
     const closeBtn = makeButton('Close', closeWorkspace);
-
     const statusEl = document.createElement('div');
     statusEl.id = IDS.status;
     statusEl.textContent = 'Auto apply enabled';
-
     const spacer = document.createElement('div');
     spacer.className = 'rk-spacer';
-
-    bar.append(brand, wrapBtn, historyBtn, validatorBtn, copyBtn, statusEl, spacer, closeBtn);
+    bar.append(brand, wrapBtn, copyBtn, statusEl, spacer, closeBtn);
     workspace.appendChild(bar);
+    try {
+      root.__RetKitDiagnostics?.ensureUi?.(workspace, {
+        version: '0.6.31',
+        getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
+      });
+    } catch {}
+    const diagnosticsButton = document.getElementById('retkit-diagnostics-button');
+    bar.insertBefore(validatorBtn, diagnosticsButton || spacer);
   }
 
   function makePreviewModeButton(mode, title) {
@@ -1554,7 +2164,8 @@
 
   function bindPreviewClickNavigation(frame) {
     const doc = frame.contentDocument;
-    if (!doc) return;
+    if (!doc || doc.__retkitPreviewClickBound) return;
+    doc.__retkitPreviewClickBound = true;
     doc.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1585,12 +2196,63 @@
     }, true);
   }
 
+  function softUpdatePreviewDocument(html) {
+    const frame = document.getElementById(IDS.previewFrame);
+    const doc = frame?.contentDocument;
+    if (!frame || !doc?.documentElement || typeof root.DOMParser !== 'function') return false;
+    try {
+      const parsed = new root.DOMParser().parseFromString(String(html || ''), 'text/html');
+      if (!parsed?.documentElement || !parsed.head || !parsed.body) return false;
+      const scrollTop = doc.scrollingElement?.scrollTop || 0;
+      const syncAttrs = (target, source) => {
+        for (const attr of [...target.attributes]) if (!source.hasAttribute(attr.name)) target.removeAttribute(attr.name);
+        for (const attr of [...source.attributes]) target.setAttribute(attr.name, attr.value);
+      };
+      syncAttrs(doc.documentElement, parsed.documentElement);
+      syncAttrs(doc.head, parsed.head);
+      syncAttrs(doc.body, parsed.body);
+      doc.head.replaceChildren(...[...parsed.head.childNodes].map((node) => doc.importNode(node, true)));
+      doc.body.replaceChildren(...[...parsed.body.childNodes].map((node) => doc.importNode(node, true)));
+      if (doc.scrollingElement) doc.scrollingElement.scrollTop = scrollTop;
+      STATE.previewHtml = String(html || '');
+      STATE.previewLastValidHtml = STATE.previewHtml;
+      STATE.previewElement = null;
+      bindPreviewClickNavigation(frame);
+      schedulePreviewResize(frame);
+      return true;
+    } catch (error) {
+      diagBreadcrumb('preview.soft-update-failed', { message: error?.message || String(error) });
+      return false;
+    }
+  }
+
+  function scheduleLocalPreview(html, delay = 140) {
+    STATE.previewPendingHtml = String(html || '');
+    clearTimeout(STATE.previewTimer);
+    STATE.previewTimer = null;
+    if (!STATE.previewPendingHtml || hasBlockingPreviewSyntaxIssue(STATE.previewPendingHtml)) return;
+    STATE.previewTimer = setTimeout(() => {
+      STATE.previewTimer = null;
+      const next = STATE.previewPendingHtml;
+      if (!next || next === STATE.previewHtml || hasBlockingPreviewSyntaxIssue(next)) return;
+      if (!softUpdatePreviewDocument(next)) applyPreviewHtml(next, true);
+    }, Math.max(0, Number(delay) || 0));
+  }
+
   function applyPreviewHtml(html, force = false) {
     const frame = document.getElementById(IDS.previewFrame);
     if (!frame || !html) return;
-    if (!force && html === STATE.previewHtml) return;
+    if (!force) {
+      scheduleLocalPreview(html);
+      return;
+    }
+    if (html === STATE.previewHtml && frame.contentDocument?.documentElement) return;
+    clearTimeout(STATE.previewTimer);
+    STATE.previewTimer = null;
+    STATE.previewPendingHtml = String(html || '');
     STATE.previewHtml = html;
     frame.onload = () => {
+      STATE.previewLastValidHtml = html;
       bindPreviewClickNavigation(frame);
       schedulePreviewResize(frame);
     };
@@ -1598,8 +2260,12 @@
   }
 
   function refreshPreviewFromMoEngage(force = false) {
+    if (!force && STATE.multiLocaleBusy) return;
     const html = getRenderedPreviewHtml();
     if (!html) return;
+    // While there is unsaved local work, the local iframe is authoritative.
+    // Never let a delayed MoEngage render replace the preview of newer text.
+    if (!force && STATE.dirty) return;
 
     if (!force && STATE.awaitingRenderedUpdate) {
       const accept = shouldAcceptRenderedPreview({
@@ -1614,64 +2280,148 @@
     applyPreviewHtml(html, force);
   }
 
+  function scheduleNativeSync(delay = idleSyncDelay()) {
+    clearTimeout(STATE.syncTimer);
+    if (!STATE.dirty || STATE.composing) return;
+    STATE.syncTimer = setTimeout(() => {
+      STATE.syncTimer = null;
+      pushOverlayToNative(false);
+    }, Math.max(0, Number(delay) || 0));
+  }
+
   async function pushOverlayToNative(force = false) {
-    if ((!force && STATE.syncPaused) || STATE.syncingFromNative) return;
+    if ((!force && (STATE.syncPaused || STATE.composing)) || STATE.syncingFromNative) return false;
     const overlay = STATE.overlayEditor;
     const native = STATE.nativeEditor;
-    if (!overlay || !native) return;
+    if (!overlay || !native) return false;
 
     if (STATE.applying) {
       STATE.pendingApply = true;
-      return;
+      return false;
     }
 
+    const startedRevision = STATE.editRevision;
+    const startedAt = Date.now();
     const next = overlay.getValue();
-    if (next === native.getValue() && !STATE.dirty) {
-      status('Already in sync', 'ok');
-      return;
+    const nativeHtmlBefore = native.getValue();
+    if (shouldBlockEmptyNativeCommit({ localHtml: next, nativeHtml: nativeHtmlBefore })) {
+      STATE.dirty = false;
+      STATE.pendingApply = false;
+      diagBreadcrumb('sync.empty-blocked', { revision: startedRevision, nativeLength: nativeHtmlBefore.length });
+      status('Empty HTML was not sent to MoEngage', 'error');
+      return false;
     }
+    if (shouldSkipNativeCommit({ localHtml: next, nativeHtml: nativeHtmlBefore })) {
+      STATE.dirty = false;
+      STATE.pendingApply = false;
+      diagBreadcrumb('sync.noop', { revision: startedRevision, reason: 'equivalent-native-html' });
+      const pendingRtl = root.__RetKitPendingRtlVerification;
+      if (pendingRtl && htmlEquivalentForSync(pendingRtl.html, next)) {
+        diagBreadcrumb('rtl.fix.persisted', { ...(pendingRtl.meta || {}), revision: startedRevision, mode: 'already-native' });
+        root.__RetKitPendingRtlVerification = null;
+      }
+      status('Already in sync', 'ok');
+      return true;
+    }
+    diagBreadcrumb('sync.start', { revision: startedRevision, length: next.length, force: Boolean(force) });
 
     STATE.applying = true;
     STATE.syncingToNative = true;
     const beforeRendered = getRenderedPreviewHtml();
     STATE.renderedBeforeEdit = beforeRendered;
     STATE.awaitingRenderedUpdate = true;
-    STATE.localPreviewUntil = Date.now() + 1400;
+    STATE.localPreviewUntil = Date.now() + 1800;
     status('Applying through MoEngage…', 'neutral');
 
     try {
       const result = await commitThroughFroala(next);
+      const stillCurrent = shouldApplyNativeResult({ startedRevision, currentRevision: STATE.editRevision });
+
+      // The user may keep typing while Froala/React is processing an older
+      // revision. Never let the result of that older commit change local state.
+      if (!stillCurrent) {
+        STATE.pendingApply = true;
+        diagBreadcrumb('sync.stale-result', { startedRevision, currentRevision: STATE.editRevision });
+        status('Newer local edit waiting to sync…', 'neutral');
+        return false;
+      }
+
       if (!result.ok) {
-        status(result.reason || 'MoEngage rejected the edit', 'error');
-        return;
+        STATE.dirty = true;
+        const reason = result.reason || 'MoEngage rejected the edit';
+        const pendingRtl = root.__RetKitPendingRtlVerification;
+        if (pendingRtl && htmlEquivalentForSync(pendingRtl.html, next)) {
+          diagBreadcrumb('rtl.fix.sync-rejected', { ...(pendingRtl.meta || {}), revision: startedRevision, reason });
+        }
+        diagIncident('moengage_sync_rejected', reason, { revision: startedRevision, durationMs: Date.now() - startedAt, html: next });
+        status(reason, 'error');
+        return false;
       }
 
       STATE.dirty = false;
+      STATE.lastAppliedRevision = startedRevision;
+      STATE.lastAppliedAt = Date.now();
+      const durationMs = STATE.lastAppliedAt - startedAt;
+      diagBreadcrumb('sync.done', { revision: startedRevision, durationMs });
+      const pendingRtl = root.__RetKitPendingRtlVerification;
+      if (pendingRtl && htmlEquivalentForSync(pendingRtl.html, next)) {
+        const actualNative = (getNativeEditor() || native)?.getValue?.() || '';
+        const persisted = htmlEquivalentForSync(actualNative, pendingRtl.html);
+        diagBreadcrumb(persisted ? 'rtl.fix.persisted' : 'rtl.fix.sync-mismatch', { ...(pendingRtl.meta || {}), revision: startedRevision, durationMs });
+        if (persisted) root.__RetKitPendingRtlVerification = null;
+      }
+      if (durationMs > 3500) diagIncident('slow_sync', `MoEngage sync took ${durationMs}ms`, { revision: startedRevision, durationMs, html: next });
       status('Applied to MoEngage', 'ok');
 
       for (const delay of [250, 700, 1400]) {
         setTimeout(() => refreshPreviewFromMoEngage(false), delay);
       }
+      return true;
     } catch (error) {
+      STATE.dirty = true;
       console.error('[RetKit] apply failed', error);
+      diagIncident('sync_exception', error?.message || String(error), { revision: startedRevision, durationMs: Date.now() - startedAt });
       status(`Apply failed: ${error?.message || error}`, 'error');
+      return false;
     } finally {
       STATE.syncingToNative = false;
       STATE.applying = false;
       if (STATE.pendingApply) {
         STATE.pendingApply = false;
-        setTimeout(() => pushOverlayToNative(false), 30);
+        if (STATE.dirty && !STATE.composing) setTimeout(() => pushOverlayToNative(false), 50);
       }
     }
   }
 
   function pullNativeToOverlay() {
-    if (STATE.syncingToNative) return;
+    if (!shouldPullNativeIntoOverlay({
+      focused: STATE.overlayFocused,
+      dirty: STATE.dirty,
+      composing: STATE.composing,
+      applying: STATE.applying || STATE.syncingToNative,
+      multiLocaleBusy: STATE.multiLocaleBusy,
+    })) return;
     const overlay = STATE.overlayEditor;
     const native = STATE.nativeEditor;
     if (!overlay || !native) return;
     const next = beautifyEmailHtml(native.getValue());
-    if (next === overlay.getValue()) return;
+    const current = overlay.getValue();
+    if (htmlEquivalentForSync(next, current)) return;
+    const nextLang = String(next.match(/<html\b[^>]*\blang=["']([^"']+)/i)?.[1] || '').toLowerCase();
+    const currentLang = String(current.match(/<html\b[^>]*\blang=["']([^"']+)/i)?.[1] || '').toLowerCase();
+    const looksLikeLocaleSwitch = Boolean(nextLang && currentLang && nextLang !== currentLang);
+    if (!looksLikeLocaleSwitch && shouldTreatNativeMismatchAsLateRevert({
+      sameContent: false,
+      lastAppliedRevision: STATE.lastAppliedRevision,
+      currentRevision: STATE.editRevision,
+      lastAppliedAt: STATE.lastAppliedAt,
+      now: Date.now(),
+    })) {
+      STATE.dirty = true;
+      diagIncident('late_native_revert', 'MoEngage changed the HTML shortly after RetKit applied it', { revision: STATE.editRevision, nativeHtml: next, localHtml: current });
+      status('MoEngage reverted the latest revision · local code preserved', 'error');
+      return;
+    }
     STATE.syncingFromNative = true;
     const cursor = overlay.getCursor();
     try {
@@ -1823,10 +2573,34 @@
       if (gutter === 'rk-foldgutter') foldLine(line);
     });
 
+    overlay.on('focus', () => { STATE.overlayFocused = true; diagBreadcrumb('editor.focus', { revision: STATE.editRevision }); });
+    overlay.on('blur', () => {
+      STATE.overlayFocused = false;
+      diagBreadcrumb('editor.blur', { revision: STATE.editRevision, dirty: STATE.dirty });
+      if (STATE.dirty && !STATE.composing) scheduleNativeSync(40);
+    });
+
+    const inputField = overlay.getInputField?.();
+    inputField?.addEventListener?.('compositionstart', () => {
+      STATE.composing = true;
+      diagBreadcrumb('editor.compositionstart', { revision: STATE.editRevision });
+      clearTimeout(STATE.syncTimer);
+      STATE.syncTimer = null;
+    });
+    inputField?.addEventListener?.('compositionend', () => {
+      STATE.composing = false;
+      diagBreadcrumb('editor.compositionend', { revision: STATE.editRevision });
+      if (STATE.dirty) scheduleNativeSync();
+    });
+
     overlay.on('change', (_cm, change) => {
       if (STATE.syncingFromNative) return;
       clearTimeout(STATE.syncTimer);
+      STATE.syncTimer = null;
+      STATE.editRevision = nextEditRevision(STATE.editRevision);
       STATE.dirty = true;
+      diagBreadcrumb('editor.change', { revision: STATE.editRevision, origin: change?.origin || '', length: overlay.getValue().length });
+      if (STATE.applying) STATE.pendingApply = true;
       scheduleFoldRefresh();
       scheduleValidation();
 
@@ -1835,15 +2609,14 @@
 
       STATE.renderedBeforeEdit = getRenderedPreviewHtml();
       STATE.awaitingRenderedUpdate = true;
-      STATE.localPreviewUntil = Date.now() + 1400;
-      applyPreviewHtml(overlay.getValue(), true);
+      STATE.localPreviewUntil = Date.now() + 1800;
+      scheduleLocalPreview(overlay.getValue());
 
       if (change?.origin === 'setValue' && !STATE.dirty) return;
-      STATE.syncTimer = setTimeout(() => pushOverlayToNative(false), 300);
+      if (!STATE.composing) scheduleNativeSync();
     });
 
     STATE.nativeChangeHandler = () => {
-      if (STATE.syncingToNative) return;
       pullNativeToOverlay();
     };
     native.on?.('change', STATE.nativeChangeHandler);
@@ -1891,6 +2664,16 @@
     sourceHost.id = IDS.sourceHost;
     editorPane.appendChild(sourceHost);
 
+    // RetKit AI is optional. The ordinary editor remains fully usable if the
+    // AI module/bridge is absent. The AI module moves sourceHost into its own
+    // vertically resizable stack without recreating CodeMirror.
+    root.__RetKitAiUi?.mountAiPanel?.({
+      getWorkspaceElement: () => workspace,
+      getEditorPaneElement: () => editorPane,
+      getSourceHostElement: () => sourceHost,
+      refreshEditorLayout: () => scheduleWorkspaceLayoutRefresh(),
+    });
+
     const grip = document.createElement('div');
     grip.className = 'rk-grip';
     let dragging = false;
@@ -1934,7 +2717,12 @@
 
     STATE.overlayEditor = createOverlayEditor(sourceHost, STATE.nativeEditor.getValue());
     attachEditorSync();
-    refreshPreviewFromMoEngage(true);
+    if (getRenderedPreviewHtml()) {
+      refreshPreviewFromMoEngage(true);
+    } else {
+      applyPreviewHtml(STATE.overlayEditor.getValue(), true);
+      status('Native preview unavailable · showing local HTML preview', 'neutral');
+    }
 
     STATE.pollTimer = setInterval(() => {
       if (!document.getElementById(IDS.workspace)) return;
@@ -1946,21 +2734,31 @@
     if (document.getElementById(IDS.workspace)) return;
     const native = getNativeEditor();
     const rendered = getRenderedPreviewHtml();
-    if (!native) {
+    const readiness = previewReadinessAction({ native: Boolean(native), rendered: Boolean(rendered) });
+    if (!readiness.open) {
+      diagIncident('native_editor_missing', 'MoEngage CodeMirror editor was not found', {});
       alert('RetKit: MoEngage CodeMirror editor was not found.');
       return;
     }
-    if (!rendered) {
-      alert('RetKit: MoEngage preview is not ready yet. Open the template preview first and try again.');
-      return;
+    if (readiness.mode === 'local-fallback') {
+      diagIncident('preview_not_ready', 'MoEngage preview was not ready; RetKit opened with local HTML preview', { html: native?.getValue?.() || '' });
     }
 
     STATE.nativeEditor = native;
     STATE.previewHtml = '';
+    STATE.previewPendingHtml = '';
+    STATE.previewLastValidHtml = '';
+    clearTimeout(STATE.previewTimer);
+    STATE.previewTimer = null;
     STATE.syncPaused = false;
     STATE.dirty = false;
     STATE.applying = false;
     STATE.pendingApply = false;
+    STATE.editRevision = 0;
+    STATE.lastAppliedRevision = 0;
+    STATE.lastAppliedAt = 0;
+    STATE.composing = false;
+    STATE.overlayFocused = false;
     STATE.awaitingRenderedUpdate = false;
     STATE.renderedBeforeEdit = '';
     STATE.localPreviewUntil = 0;
@@ -1986,6 +2784,7 @@
     if (STATE.syncTimer) clearTimeout(STATE.syncTimer);
     if (STATE.foldTimer) clearTimeout(STATE.foldTimer);
     if (STATE.validatorTimer) clearTimeout(STATE.validatorTimer);
+    if (STATE.previewTimer) clearTimeout(STATE.previewTimer);
     if (STATE.layoutRefreshTimer) clearTimeout(STATE.layoutRefreshTimer);
     if (STATE.nativeEditor && STATE.nativeChangeHandler) {
       try { STATE.nativeEditor.off?.('change', STATE.nativeChangeHandler); } catch {}
@@ -1994,10 +2793,12 @@
     STATE.syncTimer = null;
     STATE.foldTimer = null;
     STATE.validatorTimer = null;
+    STATE.previewTimer = null;
     STATE.layoutRefreshTimer = null;
     clearSearchMarks();
     clearFoldMarks();
     closeFloatingPopovers();
+    document.getElementById(IDS.multiLocaleDrawer)?.remove();
     STATE.nativeChangeHandler = null;
     STATE.overlayEditor = null;
     STATE.previewElement = null;
@@ -2006,6 +2807,73 @@
     STATE.nativeEditor?.refresh?.();
     STATE.nativeEditor = null;
   }
+
+  async function aiSetHtml(nextHtml) {
+    const editor = STATE.overlayEditor;
+    if (!editor) return false;
+    const next = String(nextHtml ?? '');
+    STATE.syncingFromNative = true;
+    try {
+      editor.setValue(next);
+      STATE.dirty = true;
+      applyPreviewHtml(next, true);
+      scheduleFoldRefresh();
+      scheduleValidation();
+    } finally {
+      STATE.syncingFromNative = false;
+    }
+    const result = await pushOverlayToNative(true);
+    return result !== false;
+  }
+
+  function aiGetSelectedSource() {
+    const editor = STATE.overlayEditor;
+    if (!editor) return null;
+    try {
+      const from = editor.getCursor('from');
+      const to = editor.getCursor('to');
+      const text = editor.getRange(from, to);
+      if (!text) return null;
+      return { text, from: editor.indexFromPos(from), to: editor.indexFromPos(to) };
+    } catch { return null; }
+  }
+
+  function aiGetPreviewDom(maxChars = 120000) {
+    const frame = document.getElementById(IDS.previewFrame);
+    let html = '';
+    try { html = frame?.contentDocument?.documentElement?.outerHTML || frame?.srcdoc || ''; } catch { html = frame?.srcdoc || ''; }
+    const cap = Math.max(1000, Math.min(500000, Number(maxChars) || 120000));
+    return html.length > cap ? `${html.slice(0, cap)}\n<!-- RetKit AI preview truncated -->` : html;
+  }
+
+  async function aiGetPreviewScreenshot() {
+    // A userscript cannot reliably rasterize an arbitrary email DOM containing
+    // cross-origin images without tainting a canvas. User drag/drop screenshots
+    // are fully supported; this explicit result prevents the agent from assuming
+    // it received pixels when it did not.
+    return { supported: false, reason: 'Automatic preview screenshot capture is unavailable for cross-origin email assets; attach or paste a screenshot into RetKit AI.' };
+  }
+
+  root.__RetKitAiWorkspaceApi = {
+    getCurrentHtml: () => STATE.overlayEditor?.getValue?.() || '',
+    setHtml: aiSetHtml,
+    getSelectedSource: aiGetSelectedSource,
+    getValidatorIssues: () => (STATE.validatorIssues || []).map((issue) => ({ ...issue })),
+    getPreviewDom: aiGetPreviewDom,
+    getPreviewScreenshot: aiGetPreviewScreenshot,
+    getPreviewMode: () => STATE.previewMode,
+    getEmailIdentity,
+    getSubject: () => root.__RetKitMoEngageBridgeApi?.getSubject?.() || '',
+    setSubject: (value) => root.__RetKitMoEngageBridgeApi?.setSubject?.(value) || false,
+    getActiveLocale: () => root.__RetKitMoEngageBridgeApi?.getActiveLocale?.() || '',
+    listLocales: () => root.__RetKitMoEngageBridgeApi?.listLocales?.() || [],
+    listAvailableLocales: () => root.__RetKitMoEngageBridgeApi?.listAvailableLocales?.() || [],
+    addLocales: (locales) => root.__RetKitMoEngageBridgeApi?.addLocales?.(locales) || { ok: false, reason: 'MoEngage locale bridge unavailable' },
+    removeLocale: (locale) => root.__RetKitMoEngageBridgeApi?.removeLocale?.(locale) || { ok: false, reason: 'MoEngage locale bridge unavailable' },
+    getLocaleHtml: (locale) => root.__RetKitMoEngageBridgeApi?.getLocaleHtml?.(locale) || '',
+    setLocaleHtml: (locale, html, options) => root.__RetKitMoEngageBridgeApi?.setLocaleHtml?.(locale, html, options) || { ok: false, reason: 'MoEngage locale bridge unavailable' },
+    switchLocale: (locale) => root.__RetKitMoEngageBridgeApi?.switchLocale?.(locale) || false,
+  };
 
   function installKeyboardShortcuts() {
     document.addEventListener('keydown', (event) => {
@@ -2041,10 +2909,15 @@
     injectStyle();
     installKeyboardShortcuts();
     root.addEventListener?.('resize', scheduleWorkspaceLayoutRefresh);
-    ensureLauncher();
-    STATE.observer = new MutationObserver(() => ensureLauncher());
-    STATE.observer.observe(document.documentElement, { childList: true, subtree: true });
-    console.log('[RetKit] MoEngage workspace v0.5.4 loaded');
+    STATE.launcherRoute = currentRouteKey();
+    syncLauncherPresence();
+    STATE.launcherTimer = root.setInterval?.(syncLauncherPresence, 800) || null;
+    root.addEventListener?.('popstate', syncLauncherPresence);
+    root.addEventListener?.('hashchange', syncLauncherPresence);
+    root.addEventListener?.('beforeunload', () => {
+      if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
+    }, { once: true });
+    console.log('[RetKit] MoEngage workspace v0.6.31 loaded');
   }
 
   boot();

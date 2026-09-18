@@ -1,256 +1,142 @@
 # RetKit × MoEngage
 
-> Current packaged build: **v0.5.9**.
+RetKit — userscript для работы с HTML-письмами внутри MoEngage.
 
+MoEngage остаётся источником данных и сам отправляет кампании. RetKit просто даёт нормальное рабочее окно поверх его редактора: код, preview, локали, поиск/замена и несколько полезных действий, которые в родном интерфейсе делать долго или неудобно.
 
-A browser-side productivity layer for editing HTML emails inside MoEngage.
+## Что умеет
 
-RetKit keeps MoEngage as the source of truth, but replaces the cramped code-editing experience with a fullscreen HTML workspace, live rendered preview, click-to-source navigation, search/replace, folding, snapshots, and lightweight email-aware validation.
+### HTML workspace
 
-> Russian documentation: [README_RU.md](README_RU.md)
+- полноэкранный HTML-редактор;
+- форматирование кода, номера строк, Wrap и folding;
+- live preview рядом с кодом;
+- клик по тексту/картинке/ссылке в preview переводит к нужному месту в HTML;
+- `Copy HTML`;
+- быстрый HTML validator;
+- изменения синхронизируются обратно в нативный редактор MoEngage.
 
-![RetKit workspace](docs/screenshots/retkit-workspace.png)
+RetKit старается не считать синхронизацию успешной вслепую: после записи он проверяет, не откатил ли MoEngage HTML обратно.
 
-## Why
+### Локали
 
-MoEngage can send the email, personalize it, and render its preview, but editing a large production HTML email in the native code view is uncomfortable. RetKit is designed for email developers who need to inspect and change large templates quickly without copying the campaign into another application.
+Верхняя строка локалей работает с реальными локалями текущей кампании.
 
-RetKit runs only in your browser through Tampermonkey. It does not send email/customer data to an external service.
+- переключение локали прямо из RetKit;
+- `+ Locale` читает нативный список MoEngage и добавляет только доступные локали;
+- не-default локаль можно удалить через нативный MoEngage flow;
+- `Backup ZIP` сохраняет HTML локалей перед рискованной массовой правкой;
+- `RTL Fix` помогает с арабской/RTL-версией и умеет откатить последнюю правку.
 
-## v0.4.0 features
+RetKit не хранит отдельную «копию мира»: если локаль не существует в MoEngage, он не должен изображать, что она существует.
 
-- Fullscreen HTML editor using MoEngage's own CodeMirror runtime.
-- Beautified working copy with line numbers and optional line wrapping.
-- Draggable code/preview split.
-- Desktop and mobile preview icons inside the preview pane.
-- Click an element in preview to jump to its current HTML source.
-- Precise text-node mapping for mixed copy such as `text <b>bold</b> text`.
-- Duplicate-aware mapping for repeated image URLs and links.
-- `Cmd+F` / `Ctrl+F` Find + Replace.
-- Replace current / Replace all.
-- Fold structural HTML blocks from gutter arrows.
-- Automatic apply back into MoEngage through the native CodeMirror + Froala Code View bridge.
-- Manual `Apply now` retry.
-- Up to 10 local snapshots per email with safe restore.
-- Email-aware HTML validator with click-to-line issue navigation.
-- Tampermonkey auto-update metadata.
+### Find / Replace
 
-## Install on Arc
+Обычный `Cmd+F` / `Ctrl+F` работает в текущем HTML.
 
-Arc uses Chromium extensions, so Tampermonkey is installed from the Chrome Web Store.
+Для массовой правки есть **Across locales**:
 
-1. Open Arc.
-2. Open the Chrome Web Store.
-3. Search for **Tampermonkey**.
-4. Choose the official Tampermonkey extension and click **Add to Chrome** / **Add extension**.
-5. Open Arc's extensions page and make sure Tampermonkey is enabled.
-6. If Arc shows a setting named **Allow user scripts**, enable it for Tampermonkey.
-7. Open Tampermonkey and choose **Create a new script** (`+`).
-8. Replace the editor contents with `dist/retkit-moengage.user.js` from this repository.
-9. Save with `Cmd+S`.
-10. Reload MoEngage.
+1. RetKit проходит по созданным локалям и считает точные совпадения.
+2. Можно оставить только нужные языки.
+3. Замена выполняется по локалям по очереди.
+4. После каждой записи RetKit проверяет, что MoEngage сохранил результат.
+5. Для последней массовой замены доступен локальный undo.
 
-When this repository is public, you can also open the raw userscript directly and let Tampermonkey install it:
+Это удобно, например, чтобы одним проходом заменить URL, `src`, кусок текста или общий фрагмент HTML во всех переводах.
 
-`https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js`
+### Subject и тестовые письма
 
-## Install on Google Chrome
+Subject в RetKit связан с нативным Subject MoEngage.
 
-1. Open Chrome.
-2. Open the Chrome Web Store.
-3. Search for **Tampermonkey**.
-4. Install the official extension.
-5. Open `chrome://extensions` and confirm Tampermonkey is enabled.
-6. Open **Details** for Tampermonkey and enable **Allow user scripts** if Chrome shows that option.
-7. Open Tampermonkey → **Create a new script**.
-8. Paste the contents of `dist/retkit-moengage.user.js`.
-9. Save.
-10. Reload MoEngage.
+`Send test` сейчас работает как безопасный handoff: RetKit временно скрывается, прокручивает страницу к родному **Test Campaign** MoEngage и оставляет сверху кнопку **Return to RetKit**. Сам тест отправляется вручную в MoEngage. Так меньше магии и меньше риска сломаться после очередного обновления их UI.
 
-## Open RetKit in MoEngage
+### AI — опционально
 
-1. Open a MoEngage email campaign/template.
-2. Switch the native template editor to HTML/Code View if necessary.
-3. Wait until MoEngage's preview is visible.
-4. A blue **RK** button appears in the lower-right corner.
-5. Click **RK**.
+В RetKit есть локальная интеграция с установленными **Codex** и **Claude Code**.
 
-![RK launcher](docs/screenshots/moengage-rk-button.png)
+AI может получить текущий HTML, subject, locale, validator и preview-контекст. Изменения HTML/subject показываются как proposal и применяются только после подтверждения.
 
-If the RK button is not visible, see [Troubleshooting](#troubleshooting).
+Сам editor от AI не зависит. Если локальный bridge не запущен, обычная работа RetKit продолжает работать.
 
-## Workspace
-
-The left side is the beautified working HTML. The right side is a preview rendered from the current email HTML.
-
-Drag the vertical divider to resize either side. Mapping is recalculated from the current preview DOM on every click, so resizing does not intentionally cache old source positions.
-
-### Wrap
-
-`Wrap` toggles long-line wrapping in the source editor. The preference is saved locally.
-
-### Desktop / mobile preview
-
-Use the monitor/phone icons in the **Preview** header. These change the local preview width; they do not change campaign targeting.
-
-### Click preview → source
-
-Click visible copy, a button/link, or an image in the right pane.
-
-RetKit attempts to select the most useful source fragment:
-
-- image → its `src` URL;
-- visible text → the exact text node under the pointer;
-- repeated images/links → the matching occurrence in the current DOM;
-- fallback → id/class/text mapping where possible.
-
-This is particularly useful for markup such as:
-
-```html
-<p>
-  Go to <b>PROMO</b>, pick the offer → Click <b>Deposit</b>
-</p>
-```
-
-Clicking `PROMO` selects only `PROMO`; clicking the ordinary copy selects that specific text fragment rather than the whole `<p>`.
-
-## Find and Replace
-
-On macOS:
-
-- `Cmd+F` — open Find + Replace.
-- `Cmd+Option+F` — also opens Find + Replace.
-
-On Windows:
-
-- `Ctrl+F` — open Find + Replace.
-- `Ctrl+H` — open Find + Replace.
-
-The bar supports previous/next match, Replace, and Replace All.
-
-## Folding
-
-Small arrows appear in the source gutter for multi-line structural blocks such as `table`, `tbody`, `tr`, `td`, and `div`.
-
-Click an arrow to collapse/expand the block without changing the HTML.
-
-## Applying changes to MoEngage
-
-Editing RetKit updates the local preview immediately and then automatically pushes the HTML back into MoEngage.
-
-The bridge uses the editor already loaded by MoEngage:
-
-1. RetKit writes into MoEngage's native CodeMirror instance.
-2. It triggers native editor input events.
-3. It toggles Froala Code View so Froala accepts the HTML.
-4. It checks that MoEngage did not revert the edit.
-
-If automatic apply fails, use **Apply now**. The status text in the toolbar reports whether MoEngage accepted or reverted the edit.
-
-![Native MoEngage editor](docs/screenshots/moengage-native-editor.png)
-
-## Snapshots and restore
-
-RetKit keeps snapshots in the current browser profile only.
-
-- **Save** — stores the current HTML manually.
-- **History** — opens up to the last 10 snapshots for this email.
-- Click a snapshot to restore it.
-- Before restore, RetKit automatically saves the current state as **Before restore**.
-
-That means a mistaken restore can itself be undone from History.
-
-Snapshots are stored in `localStorage`; they are not uploaded anywhere.
-
-## HTML validator
-
-The toolbar shows either:
-
-- `✓ HTML`
-- `⚠ N issues`
-
-Click it to inspect issues and jump to the corresponding source line.
-
-v0.4 checks for:
-
-- unexpected closing tags;
-- unclosed non-void tags;
-- nested `<a>` tags;
-- empty or `href="#"` links;
-- `<img>` without `src`;
-- `<img>` without `alt`.
-
-Email-specific handling:
-
-- void tags such as `img`, `br`, and `meta` are not expected to close;
-- comments and Outlook conditional comments are ignored by stack matching;
-- `style`, `script`, `pre`, and `textarea` bodies are treated as opaque.
-
-The validator is intentionally lightweight. It is a production-safety helper, not a complete standards validator.
-
-## Automatic updates
-
-The userscript contains:
-
-```text
-@updateURL   https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
-@downloadURL https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
-```
-
-After the public repository exists, Tampermonkey can check this URL and install newer versions. The exact update schedule depends on Tampermonkey settings.
-
-The currently loaded version is visible next to **RetKit × MoEngage** in the toolbar.
-
-## Troubleshooting
-
-### RK button does not appear
-
-Check:
-
-1. You are on `dashboard-02.moengage.com`.
-2. Tampermonkey is enabled.
-3. The RetKit userscript is enabled.
-4. Browser extension settings allow user scripts.
-5. The MoEngage email editor has loaded its Code View/CodeMirror instance.
-6. Reload the MoEngage page after updating the script.
-
-### RetKit opens but says preview is not ready
-
-Open/wait for the native MoEngage preview first, then click RK again.
-
-### Changes show in RetKit but not in MoEngage
-
-Use **Apply now** and read the status in the top bar. MoEngage can change internal editor behavior over time; the integration deliberately verifies whether the native editor kept the change.
-
-### Click-to-source maps the wrong repeated block
-
-v0.4 recalculates the descriptor on every click and tracks duplicate `src`/`href` occurrences. If a specific campaign still maps incorrectly, capture the clicked preview block and its corresponding HTML fragment when reporting the bug.
-
-## Privacy and security
-
-RetKit:
-
-- runs locally in the browser;
-- does not make its own network requests for email content;
-- does not collect credentials;
-- does not bypass MoEngage permissions;
-- stores snapshots only in the browser profile.
-
-It has access to the current MoEngage page because that is necessary to edit the template. Review the userscript before installing it in a production browser profile.
-
-## Development
+Чтобы запустить bridge:
 
 ```bash
-npm test
+cd bridge
+npm install
+npm start
+```
+
+Bridge слушает только `127.0.0.1:43118`.
+
+## Установка
+
+Нужен Tampermonkey или совместимый userscript manager.
+
+1. Установить Tampermonkey.
+2. Открыть файл `dist/retkit-moengage.user.js`.
+3. Добавить его как userscript и сохранить.
+4. Перезагрузить страницу MoEngage.
+5. В HTML editor появится кнопка **RK**.
+
+Raw-файл основной ветки:
+
+```text
+https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
+```
+
+В userscript уже прописаны `@updateURL` и `@downloadURL`, поэтому после публикации новой версии Tampermonkey сможет обновлять её сам.
+
+## Если что-то сломалось
+
+RetKit работает поверх внутреннего DOM MoEngage, поэтому крупное обновление их интерфейса может сломать конкретный bridge: локали, Subject, Test Campaign и т.п.
+
+В таком случае полезнее всего прислать:
+
+- что именно нажималось;
+- скрин нативного блока MoEngage;
+- экспорт из `Logs`, если RetKit его предлагает;
+- ошибку из Console, если она есть.
+
+Содержимое HTML в diagnostics по умолчанию не добавляется.
+
+## Разработка
+
+Нужен Node.js 20+.
+
+```bash
+npm install
 npm run check
 ```
 
-`src/retkit-moengage.user.js` and `dist/retkit-moengage.user.js` must be identical for a release.
+`npm run check` собирает userscript, проверяет синтаксис, запускает regression tests и тесты локального AI bridge.
 
-## Roadmap
+Сборка:
 
-See [ROADMAP.md](ROADMAP.md).
+```bash
+npm run build
+```
+
+Готовый userscript:
+
+```text
+dist/retkit-moengage.user.js
+```
+
+Упаковка проекта:
+
+```bash
+npm run package
+```
+
+## Что дальше
+
+Ближайшие полезные вещи, которые логично довести:
+
+- перенести в RetKit `Preview Text`, `Email Connector` и нужные Sender Details;
+- позже вернуть автоматическую отправку тестов, но только через устойчивый интеграционный слой, а не через хрупкую эмуляцию UI;
+- дальше заменять текстовые/геометрические DOM-поиски на стабильные `data-testid`, где MoEngage их даёт;
+- добавить небольшой smoke-test по сохранённому DOM fixture Test Campaign/locale dropdown, чтобы изменения MoEngage было проще ловить до ручного теста.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. См. [LICENSE](LICENSE).

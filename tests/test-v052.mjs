@@ -40,7 +40,7 @@ assert.equal(rtl.cellCount, 1);
 assert.match(rtl.html, /<p[^>]*dir="rtl"[^>]*style="text-align:\s*right"[^>]*>مرحبا/);
 assert.match(rtl.html, /<p style="text-align:left">English<\/p>/);
 
-assert.match(source, /@version\s+0\.5\.9/);
+assert.match(source, /@version\s+0\.6\.31/);
 assert.match(source, /function findNativeLocaleBar\(/);
 assert.match(source, /function discoverNativeLocaleTabs\(/);
 assert.match(source, /function findTestCampaignSection\(/);

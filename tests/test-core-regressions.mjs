@@ -5,6 +5,7 @@ import fs from 'node:fs';
 
 const file = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/core/retkit-moengage-core.user.js');
 const userscriptSource = fs.readFileSync(file, 'utf8');
+const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 await import(pathToFileURL(file).href + `?t=${Date.now()}`);
 
 const core = globalThis.__RetKitMoEngageCore;
@@ -180,6 +181,13 @@ assert.ok(core, 'userscript must expose testable core');
   assert.equal(core.isAllowedHost('example.com'), false);
 }
 
+{
+  assert.equal(core.launcherLifecycleAction({ hasNative: true, hasLauncher: false, hasWorkspace: false, routeChanged: false }), 'show');
+  assert.equal(core.launcherLifecycleAction({ hasNative: false, hasLauncher: true, hasWorkspace: false, routeChanged: true }), 'remove');
+  assert.equal(core.launcherLifecycleAction({ hasNative: false, hasLauncher: false, hasWorkspace: true, routeChanged: true }), 'close-workspace');
+  assert.equal(core.launcherLifecycleAction({ hasNative: false, hasLauncher: false, hasWorkspace: true, routeChanged: false }), 'keep', 'temporary editor remount on the same route should not close RetKit');
+}
+
 
 {
   const source = '<p dir="rtl">سيظهر حينها <b class="block_13_00">زر البونص</b> في غرفة التداول</p>';
@@ -268,35 +276,6 @@ assert.ok(core, 'userscript must expose testable core');
 }
 
 
-{
-  const a = core.snapshotStorageKey('campaign-a');
-  const b = core.snapshotStorageKey('campaign-b');
-  assert.notEqual(a, b, 'snapshot keys must be isolated per email identity');
-  assert.match(a, /^retkit-mo-snapshots:/);
-}
-
-{
-  const list = Array.from({ length: 12 }, (_, i) => ({ id: String(i), createdAt: i, html: `<p>${i}</p>` }));
-  const normalized = core.normalizeSnapshots(list, 10);
-  assert.equal(normalized.length, 10, 'snapshot history must keep at most ten states');
-  assert.equal(normalized[0].createdAt, 11, 'snapshots must be newest first');
-  assert.equal(normalized.at(-1).createdAt, 2);
-}
-
-{
-  const memory = new Map();
-  const storage = {
-    getItem(key) { return memory.has(key) ? memory.get(key) : null; },
-    setItem(key, value) { memory.set(key, String(value)); },
-  };
-  core.saveSnapshot(storage, 'mail-1', '<p>one</p>', 'manual', 1000);
-  core.saveSnapshot(storage, 'mail-1', '<p>two</p>', 'before-restore', 2000);
-  const stored = JSON.parse(storage.getItem(core.snapshotStorageKey('mail-1')));
-  assert.equal(stored.length, 2);
-  assert.equal(stored[0].html, '<p>two</p>');
-  assert.equal(stored[0].reason, 'before-restore');
-  assert.equal(stored[1].html, '<p>one</p>');
-}
 
 console.log('✓ retkit-moengage userscript core');
 
@@ -373,7 +352,12 @@ console.log('✓ retkit-moengage userscript core');
 {
   const issues = core.validateEmailHtml('<a href="#">Test</a><img alt="hero">');
   assert.ok(issues.some((i) => i.code === 'href-placeholder'), 'href # should warn');
-  assert.ok(issues.some((i) => i.code === 'img-src' && i.severity === 'error'), 'img without src should error');
+  assert.ok(issues.some((i) => i.code === 'img-src' && i.severity === 'warning'), 'img without src should warn without blocking HTML editing');
+}
+
+{
+  const issues = core.validateEmailHtml('<p class="x" data-url="{{ContentBlock[\'url\']}}">Text');
+  assert.ok(issues.some((i) => i.code === 'unclosed-tag' && i.message.includes('<p>')), 'template attributes must not hide a genuinely unclosed structural tag');
 }
 
 {
@@ -383,11 +367,11 @@ console.log('✓ retkit-moengage userscript core');
 }
 
 {
-  assert.match(userscriptSource, /@version\s+0\.5\.9/);
+  assert.match(userscriptSource, new RegExp(`@version\\s+${packageVersion.replace(/\./g, '\\.')}`));
   assert.match(userscriptSource, /@namespace\s+https:\/\/github\.com\/Brokenbass90\/retkit-moeng/);
   assert.match(userscriptSource, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/Brokenbass90\/retkit-moeng\/main\/dist\/retkit-moengage\.user\.js/);
-  assert.match(userscriptSource, /v0\.5\.4/);
+  assert.match(userscriptSource, new RegExp(`v${packageVersion.replace(/\./g, '\\.')}`));
   assert.doesNotMatch(userscriptSource, /makeButton\('Save'/);
-  assert.match(userscriptSource, /makeButton\('History ▾'/);
+  assert.doesNotMatch(userscriptSource, /makeButton\('History ▾'/);
   assert.doesNotMatch(userscriptSource, /Sync ON|50\/50|makeButton\('Desktop'|makeButton\('Mobile'/);
 }

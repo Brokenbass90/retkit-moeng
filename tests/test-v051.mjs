@@ -67,10 +67,10 @@ assert.equal(
   JSON.stringify({ email: 'qa@example.com', locales: [], personalise: true, sendVia: 'Email ID (Non-registered users)' }),
 );
 
-assert.match(source, /@version\s+0\.5\.9/);
+assert.match(source, /@version\s+0\.6\.31/);
 assert.match(source, /@require\s+https:\/\/raw\.githubusercontent\.com\/Brokenbass90\/retkit-moeng\/main\/src\/retkit-moengage\.user\.js/);
 assert.match(source, /function pruneLegacyToolbarButtons\(/);
-assert.match(source, /setTextContentIfChanged\(version, 'v0\.5\.9'\)/);
+assert.match(source, /setTextContentIfChanged\(version, 'v0\.6\.31'\)/);
 assert.match(source, /function renderLocaleStrip\(/);
 assert.match(source, /\['Save', 'Apply now'\]/);
 assert.match(source, /function switchNativeLocale\(/);

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 const distPath = new URL('../dist/retkit-moengage.user.js', import.meta.url);
 const source = fs.readFileSync(distPath, 'utf8');
 
-assert.match(source, /@version\s+0\.5\.9/);
+assert.match(source, /@version\s+0\.6\.31/);
 assert.doesNotMatch(source, /^\/\/ @require\s+/m, 'installed userscript must be standalone');
 assert.match(source, /__RetKitMoEngageCore/);
 assert.match(source, /__RetKitMoEngageBridgeCore/);
