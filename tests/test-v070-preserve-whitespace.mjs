@@ -46,9 +46,9 @@ assert.equal(preserveSourceWhitespace(raw, pretty), raw);
 
 // 4. An inline space the user adds between links is a real change and survives.
 {
-  const edited = pretty.replace('</a> <a href="https://iqoption.com/help">', '</a><a href="https://iqoption.com/help">');
+  const edited = pretty.replace('</a> <a href="https://example.com/help">', '</a><a href="https://example.com/help">');
   const out = preserveSourceWhitespace(raw, edited);
-  assert.ok(out.includes('</a><a href="https://iqoption.com/help">'));
+  assert.ok(out.includes('</a><a href="https://example.com/help">'));
 }
 
 // 5. Property check: for random edits, the result is always content-equivalent

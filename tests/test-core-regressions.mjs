@@ -110,18 +110,18 @@ assert.ok(core, 'userscript must expose testable core');
 
 
 {
-  const source = '<p class="white-text">Welcome to <b>IQ Option</b></p>';
+  const source = '<p class="white-text">Welcome to <b>Acme Mail</b></p>';
   const result = core.findRangeFromDescriptor(source, {
     tag: 'B',
     src: '',
     href: '',
     id: '',
     classes: [],
-    text: 'IQ Option',
+    text: 'Acme Mail',
     backgroundUrls: ['https://cdn.example/bg.png'],
   });
   assert.equal(result?.kind, 'text');
-  assert.equal(source.slice(result.start, result.end), 'IQ Option', 'text click should select visible text, not the whole parent block');
+  assert.equal(source.slice(result.start, result.end), 'Acme Mail', 'text click should select visible text, not the whole parent block');
 }
 
 {
@@ -293,10 +293,10 @@ console.log('✓ retkit-moengage userscript core');
 }
 
 {
-  const source = '<table><tbody><tr><td><p>Hello <b>IQ Option</b>!</p></td></tr></tbody></table>';
+  const source = '<table><tbody><tr><td><p>Hello <b>Acme Mail</b>!</p></td></tr></tbody></table>';
   const pretty = core.beautifyEmailHtml(source);
   assert.match(pretty, /<table>\n\s+<tbody>\n\s+<tr>\n\s+<td>/, 'beautifier should structure table markup');
-  assert.ok(pretty.includes('<p>Hello <b>IQ Option</b>!</p>'), 'beautifier must preserve inline copy exactly');
+  assert.ok(pretty.includes('<p>Hello <b>Acme Mail</b>!</p>'), 'beautifier must preserve inline copy exactly');
 }
 
 {
