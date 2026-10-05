@@ -1540,6 +1540,7 @@
   }
 
   function syncLauncherPresence() {
+    if (document.hidden && !document.getElementById(IDS.workspace)) return;
     const route = currentRouteKey();
     const routeChanged = Boolean(STATE.launcherRoute && STATE.launcherRoute !== route);
     const hasNative = Boolean(getNativeEditor());
@@ -2688,6 +2689,9 @@
       STATE.awaitingRenderedUpdate = false;
     }
 
+    // The poll runs twice a second; an unchanged render is a no-op, so skip it
+    // before the full-document syntax check that scheduleLocalPreview runs.
+    if (!force && html === STATE.previewHtml) return;
     applyPreviewHtml(html, force);
   }
 
@@ -3139,7 +3143,7 @@
     }
 
     STATE.pollTimer = setInterval(() => {
-      if (!document.getElementById(IDS.workspace)) return;
+      if (document.hidden || !document.getElementById(IDS.workspace)) return;
       refreshPreviewFromMoEngage(false);
     }, 500);
   }
@@ -7069,7 +7073,20 @@
   }
 
 
+  // The Subject lookup can scan every label/span/div on the MoEngage page, and
+  // the toolbar heartbeat calls it about once a second. Reuse the last match
+  // while it is still mounted and visible; rescan only when React replaced it.
+  let cachedNativeSubjectInput = null;
+
   function findNativeSubjectInput() {
+    const workspace = document.getElementById(IDS.workspace);
+    const cached = cachedNativeSubjectInput;
+    if (cached && cached.isConnected && !workspace?.contains(cached) && isVisible(cached)) return cached;
+    cachedNativeSubjectInput = locateNativeSubjectInput() || null;
+    return cachedNativeSubjectInput;
+  }
+
+  function locateNativeSubjectInput() {
     const workspace = document.getElementById(IDS.workspace);
     const directSelectors = [
       'input[name*="subject" i]',
@@ -8252,6 +8269,7 @@
     // feedback loop during editor/preview remounts. A light heartbeat only
     // ensures the bridge UI exists; locale discovery itself is cached.
     localeTimer = setInterval(() => {
+      if (document.hidden) return;
       if (document.getElementById(IDS.workspace)) { ensureBridgeToolbar(); syncSubjectFromMoEngage(false); }
       else closeBridgePopovers();
     }, 1200);

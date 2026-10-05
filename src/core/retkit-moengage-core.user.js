@@ -1229,6 +1229,7 @@
   }
 
   function syncLauncherPresence() {
+    if (document.hidden && !document.getElementById(IDS.workspace)) return;
     const route = currentRouteKey();
     const routeChanged = Boolean(STATE.launcherRoute && STATE.launcherRoute !== route);
     const hasNative = Boolean(getNativeEditor());
@@ -2377,6 +2378,9 @@
       STATE.awaitingRenderedUpdate = false;
     }
 
+    // The poll runs twice a second; an unchanged render is a no-op, so skip it
+    // before the full-document syntax check that scheduleLocalPreview runs.
+    if (!force && html === STATE.previewHtml) return;
     applyPreviewHtml(html, force);
   }
 
@@ -2828,7 +2832,7 @@
     }
 
     STATE.pollTimer = setInterval(() => {
-      if (!document.getElementById(IDS.workspace)) return;
+      if (document.hidden || !document.getElementById(IDS.workspace)) return;
       refreshPreviewFromMoEngage(false);
     }, 500);
   }

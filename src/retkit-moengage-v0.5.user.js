@@ -2411,7 +2411,20 @@
   }
 
 
+  // The Subject lookup can scan every label/span/div on the MoEngage page, and
+  // the toolbar heartbeat calls it about once a second. Reuse the last match
+  // while it is still mounted and visible; rescan only when React replaced it.
+  let cachedNativeSubjectInput = null;
+
   function findNativeSubjectInput() {
+    const workspace = document.getElementById(IDS.workspace);
+    const cached = cachedNativeSubjectInput;
+    if (cached && cached.isConnected && !workspace?.contains(cached) && isVisible(cached)) return cached;
+    cachedNativeSubjectInput = locateNativeSubjectInput() || null;
+    return cachedNativeSubjectInput;
+  }
+
+  function locateNativeSubjectInput() {
     const workspace = document.getElementById(IDS.workspace);
     const directSelectors = [
       'input[name*="subject" i]',
@@ -3594,6 +3607,7 @@
     // feedback loop during editor/preview remounts. A light heartbeat only
     // ensures the bridge UI exists; locale discovery itself is cached.
     localeTimer = setInterval(() => {
+      if (document.hidden) return;
       if (document.getElementById(IDS.workspace)) { ensureBridgeToolbar(); syncSubjectFromMoEngage(false); }
       else closeBridgePopovers();
     }, 1200);
