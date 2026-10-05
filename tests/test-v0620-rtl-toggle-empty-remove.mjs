@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
-const bridgePath = new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url);
+const bridgePath = new URL('../src/moengage/native-bridge.user.js', import.meta.url);
 const corePath = new URL('../src/core/retkit-moengage-core.user.js', import.meta.url);
 const bridgeSource = fs.readFileSync(bridgePath, 'utf8');
 const coreSource = fs.readFileSync(corePath, 'utf8');

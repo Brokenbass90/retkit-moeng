@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const bridgePath = new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url);
+const bridgePath = new URL('../src/moengage/native-bridge.user.js', import.meta.url);
 const bridgeSource = fs.readFileSync(bridgePath, 'utf8');
 const corePath = new URL('../src/core/retkit-moengage-core.user.js', import.meta.url);
 const coreSource = fs.readFileSync(corePath, 'utf8');
@@ -10,7 +10,7 @@ const coreSource = fs.readFileSync(corePath, 'utf8');
 const sandbox = { console, setTimeout, clearTimeout, globalThis: {} };
 sandbox.globalThis.globalThis = sandbox.globalThis;
 vm.createContext(sandbox);
-vm.runInContext(bridgeSource, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(bridgeSource, sandbox, { filename: 'native-bridge.user.js' });
 const bridge = sandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(bridge, 'bridge core should be exposed');
 
@@ -78,7 +78,7 @@ assert.match(bridgeSource, /Email ID \(Non-registered users\)/);
 assert.match(bridgeSource, /function findNativeSubjectInput\(/);
 assert.match(bridgeSource, /document\.getElementById\(IDS\.testPopover\)\?\.contains\?\.\(element\)/);
 assert.match(bridgeSource, /if \(isRetKitElement\(el\) \|\| localeBar/);
-assert.match(bridgeSource, /@version\s+0\.6\.31/);
-assert.match(coreSource, /@version\s+0\.6\.31/);
+assert.match(bridgeSource, /@version\s+\d+\.\d+\.\d+/);
+assert.match(coreSource, /@version\s+\d+\.\d+\.\d+/);
 
 console.log('✓ RetKit v0.5.5 product regressions');

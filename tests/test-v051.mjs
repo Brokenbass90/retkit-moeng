@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const sourcePath = new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url);
+const sourcePath = new URL('../src/moengage/native-bridge.user.js', import.meta.url);
 assert.ok(fs.existsSync(sourcePath), 'v0.5 userscript source should exist');
 const source = fs.readFileSync(sourcePath, 'utf8');
 
@@ -14,7 +14,7 @@ const sandbox = {
 };
 sandbox.globalThis.globalThis = sandbox.globalThis;
 vm.createContext(sandbox);
-vm.runInContext(source, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(source, sandbox, { filename: 'native-bridge.user.js' });
 
 const core = sandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(core, 'bridge core should be exposed');
@@ -67,10 +67,10 @@ assert.equal(
   JSON.stringify({ email: 'qa@example.com', locales: [], personalise: true, sendVia: 'Email ID (Non-registered users)' }),
 );
 
-assert.match(source, /@version\s+0\.6\.31/);
+assert.match(source, /@version\s+\d+\.\d+\.\d+/);
 assert.match(source, /@require\s+https:\/\/raw\.githubusercontent\.com\/Brokenbass90\/retkit-moeng\/main\/src\/retkit-moengage\.user\.js/);
 assert.match(source, /function pruneLegacyToolbarButtons\(/);
-assert.match(source, /setTextContentIfChanged\(version, 'v0\.6\.31'\)/);
+assert.match(source, /setTextContentIfChanged\(version, 'v\d+\.\d+\.\d+'\)/);
 assert.match(source, /function renderLocaleStrip\(/);
 assert.match(source, /\['Save', 'Apply now'\]/);
 assert.match(source, /function switchNativeLocale\(/);

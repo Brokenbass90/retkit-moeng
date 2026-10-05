@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const sourcePath = new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url);
+const sourcePath = new URL('../src/moengage/native-bridge.user.js', import.meta.url);
 const source = fs.readFileSync(sourcePath, 'utf8');
 
 const sandbox = { console, setTimeout, clearTimeout, globalThis: {} };
 sandbox.globalThis.globalThis = sandbox.globalThis;
 vm.createContext(sandbox);
-vm.runInContext(source, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(source, sandbox, { filename: 'native-bridge.user.js' });
 
 const core = sandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(core, 'bridge core should be exposed');
@@ -40,7 +40,7 @@ assert.equal(rtl.cellCount, 1);
 assert.match(rtl.html, /<p[^>]*dir="rtl"[^>]*style="text-align:\s*right"[^>]*>مرحبا/);
 assert.match(rtl.html, /<p style="text-align:left">English<\/p>/);
 
-assert.match(source, /@version\s+0\.6\.31/);
+assert.match(source, /@version\s+\d+\.\d+\.\d+/);
 assert.match(source, /function findNativeLocaleBar\(/);
 assert.match(source, /function discoverNativeLocaleTabs\(/);
 assert.match(source, /function findTestCampaignSection\(/);

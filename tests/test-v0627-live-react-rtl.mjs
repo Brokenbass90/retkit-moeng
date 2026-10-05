@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 
 function functionBody(name) {
   const starts = [`async function ${name}`, `function ${name}`]
@@ -20,7 +20,7 @@ function functionBody(name) {
   throw new Error(`cannot parse ${name}`);
 }
 
-assert.match(source, /@version\s+0\.6\.31/, 'userscript should be v0.6.31');
+assert.match(source, /@version\s+\d+\.\d+\.\d+/, 'userscript should declare a version (exact value: test-version-consistency)');
 
 const activateDropdown = functionBody('activateMdsDropdown');
 assert.match(activateDropdown, /mdsDropdownHost\(control\)/, 'MDS activation should target the actual dropdown host helper');

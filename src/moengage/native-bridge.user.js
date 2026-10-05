@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.6.31
+// @version      0.7.0
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -950,7 +950,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.6.31');
+    setTextContentIfChanged(version, 'v0.7.0');
     return true;
   }
 
@@ -3616,7 +3616,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.6.31 loaded');
+    console.log('[RetKit] MoEngage bridge v0.7.0 loaded');
   }
 
   bootBridge();

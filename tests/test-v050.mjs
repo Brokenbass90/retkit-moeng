@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const sourcePath = new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url);
+const sourcePath = new URL('../src/moengage/native-bridge.user.js', import.meta.url);
 assert.ok(fs.existsSync(sourcePath), 'v0.5 userscript source should exist');
 const source = fs.readFileSync(sourcePath, 'utf8');
 
@@ -14,7 +14,7 @@ const sandbox = {
 };
 sandbox.globalThis.globalThis = sandbox.globalThis;
 vm.createContext(sandbox);
-vm.runInContext(source, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(source, sandbox, { filename: 'native-bridge.user.js' });
 
 const core = sandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(core, 'bridge core should be exposed');

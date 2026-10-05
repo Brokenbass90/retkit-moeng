@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const source = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 const sandbox = { console, globalThis: null, location: { hostname: 'not-moengage.invalid' } };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
-vm.runInContext(source, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(source, sandbox, { filename: 'native-bridge.user.js' });
 const core = sandbox.__RetKitMoEngageBridgeCore;
 assert.ok(core);
 assert.equal(core.addLocaleTriggerLabelMatches('+ Locale'), true);

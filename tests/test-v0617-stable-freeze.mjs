@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../src/core/retkit-moengage-core.user.js', import.meta.url), 'utf8');
-const bridgeSource = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
+const bridgeSource = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 
 function functionBody(source, name) {
   const startCandidates = [`async function ${name}`, `function ${name}`]
@@ -52,7 +52,7 @@ const sandbox = {
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
-vm.runInContext(bridgeSource, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(bridgeSource, sandbox, { filename: 'native-bridge.user.js' });
 const bridgeCore = sandbox.__RetKitMoEngageBridgeCore;
 assert.equal(typeof bridgeCore?.transformRtlHtml, 'function');
 const rtlInput = `

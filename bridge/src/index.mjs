@@ -1,4 +1,5 @@
 import { createBridgeServer } from './server.mjs';
+import { BRIDGE_VERSION } from './protocol.mjs';
 
 const bridge = createBridgeServer({
   host: '127.0.0.1',
@@ -7,7 +8,7 @@ const bridge = createBridgeServer({
 });
 
 const address = await bridge.start();
-console.log(`[RetKit AI] bridge v0.6.5 listening on http://127.0.0.1:${address.port}`);
+console.log(`[RetKit AI] bridge v${BRIDGE_VERSION} listening on http://127.0.0.1:${address.port}`);
 console.log('[RetKit AI] open MoEngage and RetKit; credentials stay inside Codex/Claude Code.');
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

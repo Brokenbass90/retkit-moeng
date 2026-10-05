@@ -15,7 +15,7 @@ assert.equal(ctx.__RetKitAiProtocol.BRIDGE_WS_URL, 'ws://127.0.0.1:43118/ws');
 assert.equal(ctx.__RetKitAiProtocol.BRIDGE_HTTP_URL, 'http://127.0.0.1:43118');
 assert.match(dist, /RetKit AI Workbench/);
 assert.equal((dist.match(/const PROTOCOL_VERSION = 1/g) || []).length, 1);
-const assembled = fs.readFileSync(new URL('../src/retkit-moengage.user.js', import.meta.url), 'utf8');
+const assembled = fs.readFileSync(new URL('../dist/retkit-moengage.user.js', import.meta.url), 'utf8');
 assert.match(assembled, /retkit-ai-toggle/, 'assembled source should contain the AI workbench');
 assert.equal(assembled, dist, 'assembled source and dist should be identical after build');
 

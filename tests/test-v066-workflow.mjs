@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 
-const source = fs.readFileSync(new URL('../src/retkit-moengage.user.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../dist/retkit-moengage.user.js', import.meta.url), 'utf8');
 
 // Static UX contracts: no technical Scope/scan/rollback/cancel controls in Find/Replace UI.
 assert(!source.includes("makeButton('Scope ▾'"), 'v0.6.6 removes Scope button');

@@ -6,9 +6,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const diagnosticsPath = path.join(root, 'src/diagnostics/incident-recorder.js');
 const corePath = path.join(root, 'src/core/retkit-moengage-core.user.js');
-const bridgePath = path.join(root, 'src/retkit-moengage-v0.5.user.js');
+const bridgePath = path.join(root, 'src/moengage/native-bridge.user.js');
 const distPath = path.join(root, 'dist/retkit-moengage.user.js');
-const assembledPath = path.join(root, 'src/retkit-moengage.user.js');
 
 const aiModulePaths = [
   'src/ai/shared/protocol.js',
@@ -49,5 +48,4 @@ const sections = [diagnostics.trim(), coreParts.body.trim(), ...aiModules, bridg
 const output = `${header}\n\n${sections.join('\n\n')}\n`;
 fs.mkdirSync(path.dirname(distPath), { recursive: true });
 fs.writeFileSync(distPath, output);
-fs.writeFileSync(assembledPath, output);
-console.log(`Built ${path.relative(root, distPath)} and ${path.relative(root, assembledPath)} (${Buffer.byteLength(output)} bytes)`);
+console.log(`Built ${path.relative(root, distPath)} (${Buffer.byteLength(output)} bytes)`);

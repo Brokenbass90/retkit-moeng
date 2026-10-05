@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const bridgePath = new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url);
+const bridgePath = new URL('../src/moengage/native-bridge.user.js', import.meta.url);
 const bridgeSource = fs.readFileSync(bridgePath, 'utf8');
 const bridgeSandbox = { console, setTimeout, clearTimeout, globalThis: {} };
 bridgeSandbox.globalThis.globalThis = bridgeSandbox.globalThis;
 vm.createContext(bridgeSandbox);
-vm.runInContext(bridgeSource, bridgeSandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(bridgeSource, bridgeSandbox, { filename: 'native-bridge.user.js' });
 const bridge = bridgeSandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(bridge, 'bridge core should be exposed');
 

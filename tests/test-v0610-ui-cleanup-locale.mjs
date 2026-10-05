@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
 const coreSource = fs.readFileSync('src/core/retkit-moengage-core.user.js', 'utf8');
-const bridgeSource = fs.readFileSync('src/retkit-moengage-v0.5.user.js', 'utf8');
+const bridgeSource = fs.readFileSync('src/moengage/native-bridge.user.js', 'utf8');
 
 // History/snapshot UI is intentionally removed; browser/editor undo is the fallback.
 assert.doesNotMatch(coreSource, /makeButton\('History ▾'/, 'History toolbar button must be removed');
@@ -22,7 +22,7 @@ assert.match(coreSource, /drawer\.appendChild\(loading\)|drawer\.prepend\(loadin
 // Native locale option activation should prefer the semantic row/label over a hidden checkbox input.
 const sandbox = { globalThis: {}, console, setTimeout, clearTimeout };
 sandbox.globalThis = sandbox;
-vm.runInNewContext(bridgeSource, sandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInNewContext(bridgeSource, sandbox, { filename: 'native-bridge.user.js' });
 const bridgeCore = sandbox.__RetKitMoEngageBridgeCore;
 assert.equal(typeof bridgeCore?.localeAddActivationTarget, 'function', 'bridge core must expose localeAddActivationTarget');
 const checkbox = { tagName: 'INPUT' };

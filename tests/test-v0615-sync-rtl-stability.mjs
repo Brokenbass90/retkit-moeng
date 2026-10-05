@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const mainSource = fs.readFileSync(new URL('../src/retkit-moengage.user.js', import.meta.url), 'utf8');
+const mainSource = fs.readFileSync(new URL('../dist/retkit-moengage.user.js', import.meta.url), 'utf8');
 const coreSource = fs.readFileSync(new URL('../src/core/retkit-moengage-core.user.js', import.meta.url), 'utf8');
-const bridgeSource = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
+const bridgeSource = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 
 // 1) delete -> undo must not trigger a needless Froala commit when the local
 // working copy is already equivalent to native MoEngage HTML, even if dirty=true.
@@ -29,7 +29,7 @@ assert.match(pushBody, /shouldSkipNativeCommit|htmlEquivalentForSync\(next,\s*na
 const bridgeSandbox = { console, setTimeout, clearTimeout, globalThis: {} };
 bridgeSandbox.globalThis.globalThis = bridgeSandbox.globalThis;
 vm.createContext(bridgeSandbox);
-vm.runInContext(bridgeSource, bridgeSandbox, { filename: 'retkit-moengage-v0.5.user.js' });
+vm.runInContext(bridgeSource, bridgeSandbox, { filename: 'native-bridge.user.js' });
 const bridgeCore = bridgeSandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(bridgeCore, 'bridge core should be exposed');
 const realBlock = `

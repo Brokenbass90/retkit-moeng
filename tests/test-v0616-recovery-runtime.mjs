@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../src/core/retkit-moengage-core.user.js', import.meta.url), 'utf8');
-const bridgeSource = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
+const bridgeSource = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 const diagnosticsSource = fs.readFileSync(new URL('../src/diagnostics/incident-recorder.js', import.meta.url), 'utf8');
 const distSource = fs.readFileSync(new URL('../dist/retkit-moengage.user.js', import.meta.url), 'utf8');
 

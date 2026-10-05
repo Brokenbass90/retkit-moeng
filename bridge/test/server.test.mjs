@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBridgeServer } from '../src/server.mjs';
+import { BRIDGE_VERSION } from '../src/protocol.mjs';
 
 test('health and websocket hello expose bridge ready', async () => {
   const bridge = createBridgeServer({ port: 0, host: '127.0.0.1', detectProviders: async () => [] });
   const address = await bridge.start();
   try {
     const health = await fetch(`http://127.0.0.1:${address.port}/health`).then(r => r.json());
-    assert.deepEqual(health, { ok: true, version: '0.6.5', protocol: 1 });
+    assert.deepEqual(health, { ok: true, version: BRIDGE_VERSION, protocol: 1 });
 
     const events = [];
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { headers: { Origin: 'https://dashboard-02.moengage.com' } });

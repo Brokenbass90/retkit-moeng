@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = 1;
-export const BRIDGE_VERSION = '0.6.5';
+export const BRIDGE_VERSION = '0.7.0';
 
 const CLIENT_TYPES = new Set([
   'hello', 'provider.connect', 'provider.disconnect', 'provider.select',

@@ -29,7 +29,7 @@ assert.equal(typeof bridgeSandbox.__RetKitAiBridgeCore?.shouldRecordBridgeFailur
 assert.equal(bridgeSandbox.__RetKitAiBridgeCore.shouldRecordBridgeFailure(false, 'error'), false, 'initial offline/error state is not an incident');
 assert.equal(bridgeSandbox.__RetKitAiBridgeCore.shouldRecordBridgeFailure(true, 'error'), true, 'failure after a successful connection is an incident');
 
-const localeSource = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
+const localeSource = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 assert.doesNotMatch(localeSource, /collect\(['"]div,span['"]\)/, 'locale bar discovery must never scan every div/span in MoEngage');
 const addStart = localeSource.indexOf('function findNativeAddLocaleTrigger()');
 const addEnd = localeSource.indexOf('\n  function ', addStart + 20);

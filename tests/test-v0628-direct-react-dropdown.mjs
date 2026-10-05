@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
-const source = fs.readFileSync(new URL('../src/retkit-moengage-v0.5.user.js', import.meta.url), 'utf8');
-assert.match(source, /@version\s+0\.6\.31/, 'bridge userscript should be v0.6.31');
+const source = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
+assert.match(source, /@version\s+\d+\.\d+\.\d+/, 'bridge userscript should declare a version (exact value: test-version-consistency)');
 const start = source.indexOf('function activateMdsDropdown(control)');
 const end = source.indexOf('function testLocaleLabelToDisplay', start);
 assert.ok(start >= 0 && end > start, 'activateMdsDropdown should exist');

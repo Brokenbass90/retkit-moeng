@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = fs.readFileSync(new URL('../src/retkit-moengage.user.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../dist/retkit-moengage.user.js', import.meta.url), 'utf8');
 
-assert.match(source, /@version\s+0\.6\.31/, 'userscript should be v0.6.31');
+assert.match(source, /@version\s+\d+\.\d+\.\d+/, 'userscript should declare a version (exact value: test-version-consistency)');
 assert.match(source, /function handOffNativeTestCampaign\(\)/, 'manual native Test Campaign handoff should exist');
 assert.match(source, /workspace\.style\.visibility = 'hidden'/, 'handoff should hide RetKit without destroying the workspace');
 assert.match(source, /section\.scrollIntoView\?\.\(\{ behavior: 'smooth', block: 'center' \}\)/, 'handoff should scroll to the native Test Campaign section');

@@ -104,29 +104,36 @@ RetKit работает поверх внутреннего DOM MoEngage, поэ
 Нужен Node.js 20+.
 
 ```bash
-npm install
-npm run check
+npm run check      # сборка + все тесты + тесты AI bridge
+npm test           # только тесты (перед этим npm run build)
+npm test -- locale # только тест-файлы, в имени которых есть "locale"
 ```
 
-`npm run check` собирает userscript, проверяет синтаксис, запускает regression tests и тесты локального AI bridge.
-
-Сборка:
-
-```bash
-npm run build
-```
-
-Готовый userscript:
+### Структура
 
 ```text
-dist/retkit-moengage.user.js
+src/
+  core/retkit-moengage-core.user.js   редактор, preview, синхронизация с Froala/CodeMirror, find/replace, validator
+  moengage/native-bridge.user.js      мост к родному UI MoEngage: локали, Subject, RTL, Test Campaign, Backup ZIP
+  ai/                                  панель AI и клиент локального bridge
+  diagnostics/incident-recorder.js     журнал инцидентов (Logs)
+bridge/                                локальный AI bridge (Node, 127.0.0.1:43118)
+scripts/                               build, test-runner, set-version, package
+tests/                                 регрессионные тесты + fixtures/
+dist/retkit-moengage.user.js           собранный userscript — единственный файл для Tampermonkey
 ```
 
-Упаковка проекта:
+`dist/` собирается из `src/` командой `npm run build`; руками его не правим.
+
+### Релиз
 
 ```bash
-npm run package
+npm run version:set -- 0.7.1   # меняет версию во всех местах сразу
+npm run check
+git commit -am "release: v0.7.1" && git push
 ```
+
+После push в `main` Tampermonkey подтянет новую версию по `@updateURL`. `test-version-consistency` не даст собрать релиз, если версия где-то разъехалась.
 
 ## Что дальше
 
