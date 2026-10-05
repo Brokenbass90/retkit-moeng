@@ -4,7 +4,7 @@
 #   1. Claude Code (official installer)      -> %USERPROFILE%\.local\bin\claude.exe
 #   2. Node.js LTS, private copy for RetKit   -> %LOCALAPPDATA%\RetKit\node
 #   3. RetKit AI bridge                       -> %LOCALAPPDATA%\RetKit\bridge
-#   4. Autostart (Startup folder, hidden window) and starts it now
+#   4. No autostart items are created
 #   5. Claude login if needed. Set $env:RETKIT_CODEX = "1" before running to also install Codex.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -73,20 +73,10 @@ Copy-Item $src.FullName "$RK\bridge" -Recurse
 Remove-Item $zip, $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Ok "installed in $RK\bridge"
 
-Say 'Autostart'
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.CommandLine -like '*RetKit\bridge\src\index.mjs*' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-$entry = "$RK\bridge\src\index.mjs"
-$vbs = Join-Path ([Environment]::GetFolderPath('Startup')) 'RetKit AI bridge.vbs'
-$pathForBridge = "$env:USERPROFILE\.local\bin;$(Split-Path $Node);$env:Path"
-@"
-Set sh = CreateObject("WScript.Shell")
-sh.Environment("PROCESS")("PATH") = "$pathForBridge"
-sh.Run """$Node"" ""$entry""", 0, False
-"@ | Set-Content -Path $vbs -Encoding ASCII
-Start-Process wscript.exe -ArgumentList "`"$vbs`""
-Ok 'starts with Windows (Startup folder) and is running now'
+Say 'Start the bridge when you need RetKit AI'
+# Deliberately no Startup-folder entry: managed work machines treat new
+# autostart items as persistence.
+Write-Host "  `"$Node`" `"$RK\bridge\src\index.mjs`""
 
 Say 'Claude login'
 & claude auth status *> $null

@@ -78,15 +78,7 @@ npm install
 npm start
 ```
 
-**Подключение одной кнопкой.** Пока bridge не запущен, в панели RetKit AI есть карточка «Подключить Claude»: она сама определяет Mac или Windows. На Mac — «Скопировать команду» → Терминал → вставить → Enter; на Windows — скачать `RetKit-Connect.cmd` и открыть двойным кликом. Установщик (`install/`) ставит только недостающее, без прав администратора: Claude Code (официальный установщик), свой Node.js для RetKit, bridge и автозапуск, затем открывает вход в Claude. Галочка «ещё и Codex» ставит и Codex. Панель подключается сама.
-
-**Чтобы не запускать bridge руками (macOS):** один раз выполни в папке RetKit
-
-```bash
-npm run bridge:install
-```
-
-Дальше bridge стартует вместе с Mac и работает в фоне — панель RetKit AI сразу видит Claude / Codex. Проверить: `npm run bridge:status`. Убрать: `npm run bridge:uninstall`. Если переместил папку или обновил Node — повтори `bridge:install`. Лог: `~/Library/Logs/retkit-ai-bridge.log`.
+**Автозапуск bridge не используется:** на управляемых рабочих компьютерах средства защиты считают новые элементы автозапуска (LaunchAgent) признаком закрепления вредоносной программы. Если ставили раньше — удалите: `npm run bridge:uninstall`.
 
 Bridge слушает только `127.0.0.1:43118`. Для скриншотов нужен установленный Google Chrome (или Chromium/Edge/Brave); если он стоит не в стандартном месте — `RETKIT_CHROME=/путь/к/chrome npm start`.
 

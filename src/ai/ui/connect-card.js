@@ -74,63 +74,24 @@
       return;
     }
 
+    // Work machines: no installers, no autostart from inside the page.
     const intro = document.createElement('p');
-    intro.textContent = os === 'windows'
-      ? 'Один раз: скачайте установщик и откройте его двойным кликом. Он поставит Claude Code, связку RetKit и автозапуск — дальше всё работает само.'
-      : 'Один раз: скопируйте команду, откройте Терминал (⌘ Пробел → «Терминал»), вставьте ⌘V и нажмите Enter. Поставится Claude Code, связка RetKit и автозапуск — дальше всё работает само.';
-    card.appendChild(intro);
-
-    const codexLabel = document.createElement('label');
-    codexLabel.className = 'rk-ai-connect-opt';
-    const codex = document.createElement('input');
-    codex.type = 'checkbox';
-    codex.checked = state.providerId === 'codex';
-    codexLabel.append(codex, document.createTextNode(' ещё и Codex'));
-
-    const row = document.createElement('div');
-    row.className = 'rk-ai-connect-row';
-    const note = document.createElement('span');
-    note.className = 'rk-ai-connect-note';
-
-    if (os === 'windows') {
-      const download = document.createElement('button');
-      download.type = 'button';
-      download.className = 'rk-ai-connect-primary';
-      download.textContent = 'Скачать установщик для Windows';
-      download.addEventListener('click', () => {
-        const blob = new Blob([windowsCmdFile({ codex: codex.checked })], { type: 'application/octet-stream' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = 'RetKit-Connect.cmd';
-        document.body.appendChild(link);
-        link.click();
-        setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 1000);
-        note.textContent = 'Откройте RetKit-Connect.cmd из Загрузок. Если Windows предупредит — «Подробнее» → «Выполнить в любом случае».';
-      });
-      row.appendChild(download);
-    }
+    intro.textContent = 'RetKit AI работает через вашу модель на этом компьютере. Запустите связку RetKit в Терминале из папки RetKit и оставьте окно открытым:';
+    const code = document.createElement('code');
+    code.className = 'rk-ai-connect-note';
+    code.textContent = 'npm run bridge';
     const copy = document.createElement('button');
     copy.type = 'button';
-    copy.className = os === 'windows' ? 'rk-ai-connect-secondary' : 'rk-ai-connect-primary';
-    copy.textContent = os === 'windows' ? 'или скопировать команду PowerShell' : 'Скопировать команду';
-    copy.addEventListener('click', async () => {
-      const command = installCommand(os, { codex: codex.checked });
-      try {
-        await root.navigator.clipboard.writeText(command);
-        note.textContent = os === 'windows'
-          ? 'Скопировано. Win+X → «Терминал» → вставьте и Enter.'
-          : 'Скопировано. Теперь ⌘ Пробел → «Терминал» → ⌘V → Enter.';
-      } catch {
-        note.textContent = command;
-      }
-    });
-    row.appendChild(copy);
-    card.append(codexLabel, row, note);
-
+    copy.className = 'rk-ai-connect-secondary';
+    copy.textContent = 'Скопировать';
+    copy.addEventListener('click', async () => { try { await root.navigator.clipboard.writeText('npm run bridge'); copy.textContent = 'Скопировано'; } catch {} });
+    const row = document.createElement('div');
+    row.className = 'rk-ai-connect-row';
+    row.append(code, copy);
     const wait = document.createElement('p');
     wait.className = 'rk-ai-connect-wait';
-    wait.textContent = 'RetKit сам увидит подключение — эту карточку можно не закрывать.';
-    card.appendChild(wait);
+    wait.textContent = 'Нужен установленный и залогиненный Claude Code (или Codex). На рабочем компьютере — только с согласия IT. RetKit подключится сам, как только связка запущена.';
+    card.append(intro, row, wait);
     host.prepend(card);
   }
 

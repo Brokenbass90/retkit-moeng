@@ -6,7 +6,7 @@
 #   1. Claude Code (official installer)           → ~/.local/bin/claude
 #   2. Node.js LTS, private copy for RetKit        → ~/.retkit/node
 #   3. RetKit AI bridge                            → ~/.retkit/bridge
-#   4. Autostart (LaunchAgent), then opens the Claude login if needed.
+#   4. Opens the Claude login if needed. No autostart / login items are created.
 set -euo pipefail
 
 REPO="${RETKIT_REPO:-Brokenbass90/retkit-moeng}"
@@ -85,13 +85,11 @@ rm -rf "$RK/bridge" && cp -R "$SRC" "$RK/bridge"
 rm -rf "$TMP"
 ok "installed in $RK/bridge"
 
-# ── 5. Autostart + start now ─────────────────────────────────────────────────
-say "Autostart"
-if [ "$(uname -s)" = "Darwin" ]; then
-  "$NODE" "$RK/bridge/scripts/autostart.mjs" install
-else
-  printf '  Linux: start it with  %s %s\n' "$NODE" "$RK/bridge/src/index.mjs"
-fi
+# ── 5. No autostart ──────────────────────────────────────────────────────────
+# Deliberately NOT registering a LaunchAgent: on managed work Macs endpoint
+# security treats new login items as persistence. Start the bridge when needed:
+say "Start the bridge when you need RetKit AI"
+printf '  %s %s\n' "$NODE" "$RK/bridge/src/index.mjs"
 
 # ── 6. Claude login ──────────────────────────────────────────────────────────
 say "Claude login"

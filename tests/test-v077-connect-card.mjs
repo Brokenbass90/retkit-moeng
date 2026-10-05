@@ -31,10 +31,13 @@ const mac = fs.readFileSync(new URL('../install/install-mac.sh', import.meta.url
 assert.match(mac, /command -v claude/, 'skips Claude Code when present');
 assert.match(mac, /claude\.ai\/install\.sh/, 'uses the official Claude Code installer');
 assert.match(mac, /SHASUMS256/, 'verifies the Node.js download');
-assert.match(mac, /autostart\.mjs" install/, 'registers autostart');
+assert.doesNotMatch(mac, /autostart\.mjs" install|launchctl|LaunchAgents/, 'no persistence on work machines');
 assert.doesNotMatch(mac, /\bsudo\b/, 'no admin rights');
 const win = fs.readFileSync(new URL('../install/install-windows.ps1', import.meta.url), 'utf8');
 assert.match(win, /claude\.ai\/install\.ps1/);
 assert.match(win, /Get-FileHash/);
-assert.match(win, /GetFolderPath\('Startup'\)/);
-console.log('✓ connect card + installers');
+assert.doesNotMatch(win, /GetFolderPath\('Startup'\)|Register-ScheduledTask|CurrentVersion\\\\Run/, 'no autostart on Windows');
+const card = fs.readFileSync(new URL('../src/ai/ui/connect-card.js', import.meta.url), 'utf8');
+const renderBody = card.slice(card.indexOf('function render('));
+assert.doesNotMatch(renderBody, /installCommand\(|windowsCmdFile\(|curl -fsSL/, 'the panel never hands out installers');
+console.log('✓ connect card + installers (no persistence)');
