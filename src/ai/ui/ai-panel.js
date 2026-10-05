@@ -102,6 +102,15 @@
     style.id = IDS.style;
     style.textContent = `
       #retkit-mo-editor-pane { position:relative; }
+      .rk-ai-connect { margin:10px; padding:12px 14px; border:1px solid #2f4b7a; border-radius:12px; background:#101c2d; color:#dce6f4; font:13px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; display:grid; gap:8px; }
+      .rk-ai-connect strong { font-size:14px; }
+      .rk-ai-connect p { margin:0; color:#a9b8cc; }
+      .rk-ai-connect-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+      .rk-ai-connect-primary { border:1px solid #4c75e7; background:#315be9; color:#fff; border-radius:8px; padding:8px 12px; cursor:pointer; font-weight:700; }
+      .rk-ai-connect-secondary { border:1px solid #334155; background:#172130; color:#dce6f4; border-radius:8px; padding:7px 10px; cursor:pointer; }
+      .rk-ai-connect-opt { color:#a9b8cc; cursor:pointer; }
+      .rk-ai-connect-note { color:#91ddb0; word-break:break-all; }
+      .rk-ai-connect-wait { font-size:11.5px; color:#7f8ea3 !important; }
       #${IDS.stack} { flex:1; min-height:0; display:grid; grid-template-rows:minmax(0,1fr) 0 38px; overflow:hidden; }
       #${IDS.stack}[data-ai-open="1"] { grid-template-rows:minmax(0,1fr) 6px var(--rk-ai-height,320px); }
       #${IDS.panel} { min-height:0; overflow:hidden; display:flex; flex-direction:column; background:#0d141e; border-top:1px solid #263140; }
@@ -211,6 +220,13 @@
       status.dataset.tone = selectedView.tone;
       status.title = selectedProviderButton()?.title || selectedView.label;
     }
+    try {
+      root.__RetKitAiConnect?.render?.(document.getElementById(IDS.body), {
+        bridge: bridgeState,
+        provider: providerInfo[selected] || {},
+        providerId: selected,
+      });
+    } catch {}
     const usageEl = document.getElementById(IDS.usage);
     if (usageEl) {
       usageEl.textContent = usageStatusText(providerUsage[selected]);

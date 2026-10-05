@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.6
+// @version      0.7.7
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -2450,7 +2450,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.6</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.7</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2475,7 +2475,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.7.6',
+        version: '0.7.7',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3505,7 +3505,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.7.6 loaded');
+    console.log('[RetKit] MoEngage workspace v0.7.7 loaded');
   }
 
   boot();
@@ -4037,7 +4037,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.7.6',
+          clientVersion: '0.7.7',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -4692,6 +4692,145 @@
 (function (root) {
   'use strict';
 
+  // "Connect Claude / Codex" card shown inside RetKit AI while the local bridge
+  // is not running (or the model CLI is missing / not logged in). The browser
+  // cannot install programs by itself, so the card does the most it can:
+  // detects Mac / Windows, gives the one installer for that system (copy one
+  // line on Mac, download a .cmd on Windows) and waits for the bridge to come up.
+
+  const INSTALL_BASE = 'https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/install';
+  const CARD_ID = 'retkit-ai-connect-card';
+
+  function detectOs(nav = root.navigator) {
+    const raw = String(nav?.userAgentData?.platform || nav?.platform || nav?.userAgent || '').toLowerCase();
+    if (raw.includes('win')) return 'windows';
+    if (raw.includes('mac') || raw.includes('darwin')) return 'mac';
+    if (raw.includes('linux')) return 'linux';
+    return 'mac';
+  }
+
+  function installCommand(os, { codex = false } = {}) {
+    if (os === 'windows') {
+      const prefix = codex ? '$env:RETKIT_CODEX="1"; ' : '';
+      return `${prefix}irm ${INSTALL_BASE}/install-windows.ps1 | iex`;
+    }
+    return `curl -fsSL ${INSTALL_BASE}/install-mac.sh | bash${codex ? ' -s -- --codex' : ''}`;
+  }
+
+  function windowsCmdFile({ codex = false } = {}) {
+    return [
+      '@echo off',
+      'rem RetKit AI setup: installs Claude Code, the RetKit bridge and autostart.',
+      `powershell -NoProfile -ExecutionPolicy Bypass -Command "${codex ? '$env:RETKIT_CODEX=\'1\'; ' : ''}irm ${INSTALL_BASE}/install-windows.ps1 | iex"`,
+      'echo.',
+      'pause',
+      '',
+    ].join('\r\n');
+  }
+
+  // What the card should say for the current bridge/provider state.
+  function connectView({ bridge = {}, provider = {}, providerId = 'claude' } = {}) {
+    const name = providerId === 'codex' ? 'Codex' : 'Claude';
+    if (String(bridge.status || '') !== 'connected') return { step: 'install', title: `Подключить ${name}` };
+    if (!provider.detected) return { step: 'install', title: `${name} не найден на этом компьютере` };
+    if (provider.authenticated === 'no') return { step: 'login', title: `Войдите в ${name}` };
+    return null;
+  }
+
+  function render(host, state = {}) {
+    if (typeof document === 'undefined' || !host) return;
+    const view = connectView(state);
+    let card = document.getElementById(CARD_ID);
+    if (!view) { card?.remove(); return; }
+    const os = detectOs();
+    const key = `${view.step}|${view.title}|${os}`;
+    if (card && card.dataset.key === key) return;
+    card?.remove();
+    card = document.createElement('div');
+    card.id = CARD_ID;
+    card.dataset.key = key;
+    card.className = 'rk-ai-connect';
+
+    const title = document.createElement('strong');
+    title.textContent = view.title;
+    card.appendChild(title);
+
+    if (view.step === 'login') {
+      const text = document.createElement('p');
+      text.textContent = state.providerId === 'codex'
+        ? 'Откройте Терминал, введите codex login и войдите в браузере. RetKit подхватит вход сам.'
+        : 'Откройте Терминал, введите claude и войдите в браузере (потом /exit). RetKit подхватит вход сам.';
+      card.appendChild(text);
+      host.prepend(card);
+      return;
+    }
+
+    const intro = document.createElement('p');
+    intro.textContent = os === 'windows'
+      ? 'Один раз: скачайте установщик и откройте его двойным кликом. Он поставит Claude Code, связку RetKit и автозапуск — дальше всё работает само.'
+      : 'Один раз: скопируйте команду, откройте Терминал (⌘ Пробел → «Терминал»), вставьте ⌘V и нажмите Enter. Поставится Claude Code, связка RetKit и автозапуск — дальше всё работает само.';
+    card.appendChild(intro);
+
+    const codexLabel = document.createElement('label');
+    codexLabel.className = 'rk-ai-connect-opt';
+    const codex = document.createElement('input');
+    codex.type = 'checkbox';
+    codex.checked = state.providerId === 'codex';
+    codexLabel.append(codex, document.createTextNode(' ещё и Codex'));
+
+    const row = document.createElement('div');
+    row.className = 'rk-ai-connect-row';
+    const note = document.createElement('span');
+    note.className = 'rk-ai-connect-note';
+
+    if (os === 'windows') {
+      const download = document.createElement('button');
+      download.type = 'button';
+      download.className = 'rk-ai-connect-primary';
+      download.textContent = 'Скачать установщик для Windows';
+      download.addEventListener('click', () => {
+        const blob = new Blob([windowsCmdFile({ codex: codex.checked })], { type: 'application/octet-stream' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'RetKit-Connect.cmd';
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 1000);
+        note.textContent = 'Откройте RetKit-Connect.cmd из Загрузок. Если Windows предупредит — «Подробнее» → «Выполнить в любом случае».';
+      });
+      row.appendChild(download);
+    }
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = os === 'windows' ? 'rk-ai-connect-secondary' : 'rk-ai-connect-primary';
+    copy.textContent = os === 'windows' ? 'или скопировать команду PowerShell' : 'Скопировать команду';
+    copy.addEventListener('click', async () => {
+      const command = installCommand(os, { codex: codex.checked });
+      try {
+        await root.navigator.clipboard.writeText(command);
+        note.textContent = os === 'windows'
+          ? 'Скопировано. Win+X → «Терминал» → вставьте и Enter.'
+          : 'Скопировано. Теперь ⌘ Пробел → «Терминал» → ⌘V → Enter.';
+      } catch {
+        note.textContent = command;
+      }
+    });
+    row.appendChild(copy);
+    card.append(codexLabel, row, note);
+
+    const wait = document.createElement('p');
+    wait.className = 'rk-ai-connect-wait';
+    wait.textContent = 'RetKit сам увидит подключение — эту карточку можно не закрывать.';
+    card.appendChild(wait);
+    host.prepend(card);
+  }
+
+  root.__RetKitAiConnect = { detectOs, installCommand, windowsCmdFile, connectView, render, INSTALL_BASE };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+(function (root) {
+  'use strict';
+
   function keyAction(event) {
     if (event?.key !== 'Enter') return 'none';
     return event.shiftKey ? 'newline' : 'send';
@@ -4996,6 +5135,15 @@
     style.id = IDS.style;
     style.textContent = `
       #retkit-mo-editor-pane { position:relative; }
+      .rk-ai-connect { margin:10px; padding:12px 14px; border:1px solid #2f4b7a; border-radius:12px; background:#101c2d; color:#dce6f4; font:13px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; display:grid; gap:8px; }
+      .rk-ai-connect strong { font-size:14px; }
+      .rk-ai-connect p { margin:0; color:#a9b8cc; }
+      .rk-ai-connect-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+      .rk-ai-connect-primary { border:1px solid #4c75e7; background:#315be9; color:#fff; border-radius:8px; padding:8px 12px; cursor:pointer; font-weight:700; }
+      .rk-ai-connect-secondary { border:1px solid #334155; background:#172130; color:#dce6f4; border-radius:8px; padding:7px 10px; cursor:pointer; }
+      .rk-ai-connect-opt { color:#a9b8cc; cursor:pointer; }
+      .rk-ai-connect-note { color:#91ddb0; word-break:break-all; }
+      .rk-ai-connect-wait { font-size:11.5px; color:#7f8ea3 !important; }
       #${IDS.stack} { flex:1; min-height:0; display:grid; grid-template-rows:minmax(0,1fr) 0 38px; overflow:hidden; }
       #${IDS.stack}[data-ai-open="1"] { grid-template-rows:minmax(0,1fr) 6px var(--rk-ai-height,320px); }
       #${IDS.panel} { min-height:0; overflow:hidden; display:flex; flex-direction:column; background:#0d141e; border-top:1px solid #263140; }
@@ -5105,6 +5253,13 @@
       status.dataset.tone = selectedView.tone;
       status.title = selectedProviderButton()?.title || selectedView.label;
     }
+    try {
+      root.__RetKitAiConnect?.render?.(document.getElementById(IDS.body), {
+        bridge: bridgeState,
+        provider: providerInfo[selected] || {},
+        providerId: selected,
+      });
+    } catch {}
     const usageEl = document.getElementById(IDS.usage);
     if (usageEl) {
       usageEl.textContent = usageStatusText(providerUsage[selected]);
@@ -6186,7 +6341,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.7.6');
+    setTextContentIfChanged(version, 'v0.7.7');
     return true;
   }
 
@@ -8979,7 +9134,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.7.6' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.7.7' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -9005,7 +9160,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.7.6 loaded');
+    console.log('[RetKit] MoEngage bridge v0.7.7 loaded');
   }
 
   bootBridge();

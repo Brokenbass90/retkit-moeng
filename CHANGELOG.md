@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.7 — подключение Claude / Codex одной кнопкой
+
+- Карточка «Подключить Claude» в RetKit AI (Mac — одна команда, Windows — `RetKit-Connect.cmd`), сама исчезает, когда bridge и модель готовы; подсказка про вход, если не залогинен.
+- Установщики `install/install-mac.sh`, `install/install-windows.ps1`: Claude Code, приватный Node.js (с проверкой SHA-256), bridge, автозапуск, вход; опционально Codex. Без sudo/админа.
+- `npm run dev:loader` → `dev/retkit-dev-loader.user.js`: ставится в Tampermonkey один раз и грузит RetKit из папки проекта — после сборки достаточно обновить вкладку MoEngage.
+
 ## 0.7.6 — своя замена для каждой локали
 
 - ⌘F → Across locales: клик по локали → поле «{LOCALE}: replace with». Пусто — общая замена из «Replace with…», заполнено — своя для этой локали (например, локализованный баннер). Метка локали получает ✎.

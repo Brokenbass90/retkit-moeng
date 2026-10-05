@@ -17,6 +17,7 @@ const aiModulePaths = [
   'src/ai/context/context-adapter.js',
   'src/ai/ui/attachment-dropzone.js',
   'src/ai/ui/diff-view.js',
+  'src/ai/ui/connect-card.js',
   'src/ai/ui/chat-view.js',
   'src/ai/ui/ai-panel.js',
 ];
