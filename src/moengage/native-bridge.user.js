@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.0
+// @version      0.7.1
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -576,6 +576,8 @@
     subjectInput: 'retkit-mo-subject-input',
     rtlButton: 'retkit-mo-rtl-button',
     testButton: 'retkit-mo-test-button',
+    originalButton: 'retkit-mo-original-button',
+    originalPopover: 'retkit-mo-original-popover',
     testPopover: 'retkit-mo-test-popover',
     addLocaleButton: 'retkit-mo-add-locale-button',
     backupLocalesButton: 'retkit-mo-backup-locales-button',
@@ -950,7 +952,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.7.0');
+    setTextContentIfChanged(version, 'v0.7.1');
     return true;
   }
 
@@ -966,7 +968,7 @@
   }
 
   function closeBridgePopovers(except = '') {
-    for (const id of [IDS.testPopover]) {
+    for (const id of [IDS.testPopover, IDS.originalPopover]) {
       if (id !== except) document.getElementById(id)?.remove();
     }
   }
@@ -3413,6 +3415,12 @@
       const button = makeToolbarButton(IDS.rtlButton, 'RTL Fix', applyRtlFix, 'Toggle RTL on the currently open locale; click again to restore it');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
     }
+    if (!document.getElementById(IDS.originalButton)) {
+      const button = makeToolbarButton(IDS.originalButton, '↶ Original', renderOriginalPopover, 'Return to the version this email had before RetKit first changed it');
+      button.style.display = 'none';
+      bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
+      refreshOriginalButton(true);
+    }
     if (!document.getElementById(IDS.testButton)) {
       const button = makeToolbarButton(IDS.testButton, 'Send test', handOffNativeTestCampaign, 'Open the native MoEngage Test Campaign form');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
@@ -3507,7 +3515,7 @@
     const commit = root.__RetKitMoEngageCore?.commitNativeHtml;
     if (typeof commit !== 'function') return { ok: false, locale: wanted, reason: 'Native commit helper is unavailable' };
     const next = String(html ?? '');
-    const result = await Promise.resolve(commit(next, { fast: true }));
+    const result = await Promise.resolve(commit(next, { fast: true, locale: wanted }));
     return { ok: Boolean(result?.ok), locale: wanted, tentative: true, reason: result?.reason || '' };
   }
 
@@ -3524,7 +3532,7 @@
     // commitThroughFroala(fast:false) already performs two persistence checks
     // after the React/Froala render cycle. Do not pay a second fixed 700ms
     // settle delay here for every locale.
-    const result = await Promise.resolve(commit(next, { fast: false }));
+    const result = await Promise.resolve(commit(next, { fast: false, locale: wanted }));
     const actual = String(getNativeEditorOutsideWorkspace()?.getValue?.() || '');
     const equivalent = root.__RetKitMoEngageCore?.htmlEquivalentForSync;
     const persisted = Boolean(result?.ok) && (typeof equivalent === 'function' ? equivalent(actual, next) : actual === next);
@@ -3598,7 +3606,154 @@
     },
   };
 
+  // ─── Original version (first-touch backup) ────────────────────────────────
+  // The core captures the HTML right before RetKit's first write per campaign +
+  // locale. This button appears only when such a snapshot exists and lets the
+  // user return to it. Snapshots expire on their own (see original-snapshots.js).
+  function originalsApi() {
+    return root.__RetKitOriginals || null;
+  }
+
+  function currentOriginalContext() {
+    const api = originalsApi();
+    if (!api) return null;
+    return { campaign: api.campaignKeyFromUrl(root.location?.href || ''), locale: getActiveLocale() || 'default' };
+  }
+
+  let originalRefreshTick = 0;
+  let originalButtonKey = '';
+  async function refreshOriginalButton(force = false) {
+    const button = document.getElementById(IDS.originalButton);
+    const api = originalsApi();
+    if (!button || !api?.store) return;
+    originalRefreshTick += 1;
+    if (!force && originalRefreshTick % 3 !== 0) return;
+    const context = currentOriginalContext();
+    if (!context) return;
+    const key = api.snapshotKey(context.campaign, context.locale);
+    try {
+      const entry = await api.store.get(context.campaign, context.locale);
+      button.style.display = entry ? '' : 'none';
+      originalButtonKey = entry ? key : '';
+      if (entry) button.title = `Original ${context.locale} from ${formatOriginalTime(entry.capturedAt)} — click to compare or restore`;
+    } catch {
+      button.style.display = 'none';
+    }
+  }
+
+  function formatOriginalTime(ms) {
+    try {
+      return new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return String(new Date(ms));
+    }
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    return value >= 1024 ? `${Math.round(value / 1024)} KB` : `${value} B`;
+  }
+
+  async function renderOriginalPopover() {
+    const existing = document.getElementById(IDS.originalPopover);
+    if (existing) { existing.remove(); return; }
+    closeBridgePopovers(IDS.originalPopover);
+    const api = originalsApi();
+    const context = currentOriginalContext();
+    if (!api?.store || !context) return;
+    const entry = await api.store.get(context.campaign, context.locale);
+    if (!entry) { refreshOriginalButton(true); return; }
+
+    const editor = getOverlayEditor();
+    const core = root.__RetKitMoEngageCore;
+    const current = editor?.getValue?.() || '';
+    const same = Boolean(core?.htmlEquivalentForSync?.(current, entry.html));
+
+    const pop = document.createElement('div');
+    pop.id = IDS.originalPopover;
+    pop.className = 'rk-v050-popover';
+    const head = document.createElement('div');
+    head.className = 'rk-v050-head';
+    const title = document.createElement('strong');
+    title.textContent = `Original · ${entry.locale}`;
+    const close = document.createElement('button');
+    close.className = 'rk-v050-secondary';
+    close.textContent = '×';
+    close.addEventListener('click', () => pop.remove());
+    head.append(title, close);
+
+    const grid = document.createElement('div');
+    grid.className = 'rk-v050-grid';
+    const info = document.createElement('div');
+    info.className = 'rk-v050-hint';
+    info.textContent = `Saved ${formatOriginalTime(entry.capturedAt)} before RetKit's first change · ${formatBytes(entry.bytes)}. `
+      + (same ? 'The email is currently identical to it.' : 'The email has changed since then.')
+      + ' Kept in this browser only; removed automatically after 14 days without use.';
+
+    const row = document.createElement('div');
+    row.className = 'rk-v050-row';
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'rk-v050-primary';
+    restore.textContent = 'Restore original';
+    restore.disabled = same || !editor;
+    restore.addEventListener('click', () => {
+      if (restore.dataset.armed !== '1') {
+        restore.dataset.armed = '1';
+        restore.textContent = 'Click again to restore';
+        setTimeout(() => {
+          if (!restore.isConnected) return;
+          restore.dataset.armed = '';
+          restore.textContent = 'Restore original';
+        }, 4000);
+        return;
+      }
+      api.pendingExactRestore = { html: entry.html, at: Date.now() };
+      const text = core?.beautifyEmailHtml ? core.beautifyEmailHtml(entry.html) : entry.html;
+      const last = editor.lastLine();
+      // An undoable edit: Cmd/Ctrl+Z in the editor brings the newer version back.
+      editor.replaceRange(text, { line: editor.firstLine?.() ?? 0, ch: 0 }, { line: last, ch: (editor.getLine(last) || '').length }, '+retkit-restore-original');
+      diagBreadcrumb?.('original.restore', { locale: entry.locale, bytes: entry.bytes });
+      workspaceStatus(`Restoring original ${entry.locale}… (Cmd/Ctrl+Z undoes it)`, 'neutral');
+      pop.remove();
+    });
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'rk-v050-secondary';
+    copy.textContent = 'Copy original HTML';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(entry.html); copy.textContent = 'Copied'; } catch { copy.textContent = 'Copy failed'; }
+    });
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.className = 'rk-v050-secondary';
+    discard.textContent = 'Forget';
+    discard.title = 'Delete this saved original now';
+    discard.addEventListener('click', async () => {
+      await api.store.discard(context.campaign, context.locale);
+      pop.remove();
+      refreshOriginalButton(true);
+      workspaceStatus(`Saved original ${entry.locale} removed`, 'neutral');
+    });
+    row.append(restore, copy, discard);
+    grid.append(info, row);
+    pop.append(head, grid);
+    document.body.appendChild(pop);
+  }
+
+  function bootOriginals() {
+    const api = originalsApi();
+    if (!api || api.store) return;
+    try {
+      api.store = api.createStore({ version: '0.7.1' }); // version: scripts/version-files.mjs
+      api.contextProvider = currentOriginalContext;
+      api.onChange = () => refreshOriginalButton(true);
+      api.store.prune().catch(() => {});
+    } catch {}
+  }
+
   function bootBridge() {
+    bootOriginals();
     injectBridgeStyle();
     ensureBridgeToolbar();
 
@@ -3608,7 +3763,7 @@
     // ensures the bridge UI exists; locale discovery itself is cached.
     localeTimer = setInterval(() => {
       if (document.hidden) return;
-      if (document.getElementById(IDS.workspace)) { ensureBridgeToolbar(); syncSubjectFromMoEngage(false); }
+      if (document.getElementById(IDS.workspace)) { ensureBridgeToolbar(); syncSubjectFromMoEngage(false); refreshOriginalButton(false); }
       else closeBridgePopovers();
     }, 1200);
 
@@ -3616,7 +3771,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.7.0 loaded');
+    console.log('[RetKit] MoEngage bridge v0.7.1 loaded');
   }
 
   bootBridge();

@@ -16,5 +16,6 @@ export const VERSION_PATTERNS = [
   { file: 'src/ai/client/bridge-client.js', re: /(clientVersion: ')(\d+\.\d+\.\d+)(')/ },
   { file: 'src/moengage/native-bridge.user.js', re: /(\/\/ @version\s+)(\d+\.\d+\.\d+)()/ },
   { file: 'src/moengage/native-bridge.user.js', re: /(setTextContentIfChanged\(version, 'v)(\d+\.\d+\.\d+)('\))/ },
+  { file: 'src/moengage/native-bridge.user.js', re: /(api\.createStore\(\{ version: ')(\d+\.\d+\.\d+)(')/ },
   { file: 'src/moengage/native-bridge.user.js', re: /(MoEngage bridge v)(\d+\.\d+\.\d+)( loaded)/ },
 ];

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.0
+// @version      0.7.1
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1335,7 +1335,12 @@
     // wake its textarea, leave Code View, fire a visual-editor input, then return.
     // Keep the author's original formatting outside the edited region so
     // MoEngage never receives a re-indented copy of the whole email.
-    next = preserveSourceWhitespace(native.getValue?.() || '', next);
+    const nativeBefore = native.getValue?.() || '';
+    // First write for this campaign+locale: keep the untouched version so the
+    // user can return to it (see src/backup/original-snapshots.js).
+    try { root.__RetKitOriginals?.captureBeforeCommit?.(nativeBefore, { locale: options.locale }); } catch {}
+    const exactOriginal = root.__RetKitOriginals?.takeExactRestore?.(next, htmlEquivalentForSync);
+    next = exactOriginal ?? preserveSourceWhitespace(nativeBefore, next);
     native.focus?.();
     writeNativeEditorValue(native, next);
     native.save?.();
@@ -2320,7 +2325,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2345,7 +2350,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.7.0',
+        version: '0.7.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3335,10 +3340,215 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.7.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.7.1 loaded');
   }
 
   boot();
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+(function (root) {
+  'use strict';
+
+  // "Original" snapshots: the first version of an email RetKit saw for a
+  // campaign + locale, captured right before RetKit's first write. Lets the
+  // user return to it with one click. Stored in IndexedDB (never in MoEngage's
+  // own localStorage) and pruned automatically: unused snapshots expire, and
+  // the store has a size cap. HTML never leaves the browser.
+
+  const DB_NAME = 'retkit-originals';
+  const STORE = 'snapshots';
+  const DEFAULT_LIMITS = Object.freeze({
+    ttlMs: 14 * 24 * 60 * 60 * 1000, // forgotten after 14 days without use
+    maxEntries: 300,
+    maxBytes: 40 * 1024 * 1024,
+  });
+
+  // MoEngage campaign URLs carry a 24-hex id; prefer it so wizard steps and
+  // query noise do not split one campaign into several keys.
+  function campaignKeyFromUrl(href) {
+    const text = String(href || '');
+    const id = text.match(/\b[0-9a-f]{24}\b/i);
+    if (id) return `campaign:${id[0].toLowerCase()}`;
+    try {
+      const url = new URL(text);
+      return `path:${url.pathname}${url.search}${url.hash}`;
+    } catch {
+      return `path:${text}`;
+    }
+  }
+
+  function snapshotKey(campaign, locale) {
+    return `${campaign}|${String(locale || 'default').toUpperCase()}`;
+  }
+
+  function byteLength(value) {
+    const text = String(value || '');
+    try { return new TextEncoder().encode(text).length; } catch { return text.length; }
+  }
+
+  // Pure: which keys to delete. Expired first, then least recently used until
+  // both caps hold. `protectKey` (the one in use right now) is never evicted.
+  function planPrune(entries, now, limits = DEFAULT_LIMITS, protectKey = '') {
+    const list = [...(entries || [])].sort((a, b) => (a.lastSeenAt || 0) - (b.lastSeenAt || 0));
+    const remove = new Set();
+    for (const entry of list) {
+      if (entry.key !== protectKey && now - (entry.lastSeenAt || entry.capturedAt || 0) > limits.ttlMs) remove.add(entry.key);
+    }
+    const kept = list.filter((entry) => !remove.has(entry.key));
+    let bytes = kept.reduce((sum, entry) => sum + (entry.bytes || 0), 0);
+    let count = kept.length;
+    for (const entry of kept) {
+      if (count <= limits.maxEntries && bytes <= limits.maxBytes) break;
+      if (entry.key === protectKey) continue;
+      remove.add(entry.key);
+      bytes -= entry.bytes || 0;
+      count -= 1;
+    }
+    return [...remove];
+  }
+
+  function memoryBackend() {
+    const map = new Map();
+    return {
+      async get(key) { return map.has(key) ? { ...map.get(key) } : null; },
+      async put(entry) { map.set(entry.key, { ...entry }); },
+      async delete(key) { map.delete(key); },
+      async all() { return [...map.values()].map((entry) => ({ ...entry })); },
+    };
+  }
+
+  function indexedDbBackend(idb = root.indexedDB) {
+    if (!idb) return null;
+    let opening = null;
+    const open = () => {
+      opening = opening || new Promise((resolve, reject) => {
+        const request = idb.open(DB_NAME, 1);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: 'key' });
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      return opening;
+    };
+    const run = async (mode, fn) => {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, mode);
+        const request = fn(tx.objectStore(STORE));
+        tx.oncomplete = () => resolve(request?.result);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    };
+    return {
+      get: (key) => run('readonly', (store) => store.get(key)).then((value) => value || null),
+      put: (entry) => run('readwrite', (store) => store.put(entry)),
+      delete: (key) => run('readwrite', (store) => store.delete(key)),
+      all: () => run('readonly', (store) => store.getAll()).then((value) => value || []),
+    };
+  }
+
+  function createStore(options = {}) {
+    const backend = options.backend || indexedDbBackend(options.indexedDB) || memoryBackend();
+    const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
+    const now = options.now || (() => Date.now());
+    const version = String(options.version || '');
+    const pendingCaptures = new Map();
+
+    // Keep only the first version: an existing snapshot is never overwritten.
+    async function captureIfMissing({ campaign, locale, html }) {
+      const value = String(html ?? '');
+      if (!campaign || !value.trim()) return { captured: false, reason: 'empty' };
+      const key = snapshotKey(campaign, locale);
+      if (pendingCaptures.has(key)) return pendingCaptures.get(key);
+      const job = (async () => {
+        const existing = await backend.get(key);
+        if (existing) {
+          existing.lastSeenAt = now();
+          await backend.put(existing);
+          return { captured: false, reason: 'exists', entry: existing };
+        }
+        const entry = {
+          key, campaign, locale: String(locale || 'default').toUpperCase(), html: value,
+          bytes: byteLength(value), capturedAt: now(), lastSeenAt: now(), version,
+        };
+        await backend.put(entry);
+        await prune(key);
+        return { captured: true, entry };
+      })().finally(() => pendingCaptures.delete(key));
+      pendingCaptures.set(key, job);
+      return job;
+    }
+
+    async function get(campaign, locale) {
+      const entry = await backend.get(snapshotKey(campaign, locale));
+      if (entry) {
+        entry.lastSeenAt = now();
+        await backend.put(entry);
+      }
+      return entry;
+    }
+
+    async function discard(campaign, locale) {
+      await backend.delete(snapshotKey(campaign, locale));
+    }
+
+    async function prune(protectKey = '') {
+      const entries = await backend.all();
+      const remove = planPrune(entries, now(), limits, protectKey);
+      for (const key of remove) await backend.delete(key);
+      return remove;
+    }
+
+    async function stats() {
+      const entries = await backend.all();
+      return { count: entries.length, bytes: entries.reduce((sum, entry) => sum + (entry.bytes || 0), 0) };
+    }
+
+    return { captureIfMissing, get, discard, prune, stats, limits };
+  }
+
+  const api = {
+    DEFAULT_LIMITS, campaignKeyFromUrl, snapshotKey, planPrune, createStore, memoryBackend,
+    store: null,
+    // Set by the MoEngage bridge: returns { campaign, locale } for the open email.
+    contextProvider: null,
+    // Called by the core right before RetKit writes HTML into MoEngage.
+    captureBeforeCommit(html, options = {}) {
+      try {
+        const store = api.store;
+        if (!store) return null;
+        const context = api.contextProvider ? api.contextProvider() : null;
+        const campaign = context?.campaign || '';
+        const locale = options.locale || context?.locale || '';
+        if (!campaign) return null;
+        return store.captureIfMissing({ campaign, locale, html })
+          .then((result) => { try { api.onChange?.(); } catch {} return result; })
+          .catch(() => null);
+      } catch {
+        return null;
+      }
+    },
+    onChange: null,
+    // Restore hands the exact original bytes to the next commit, so MoEngage
+    // gets the author's original formatting back rather than a re-indent.
+    pendingExactRestore: null,
+    takeExactRestore(next, equivalent) {
+      const pending = api.pendingExactRestore;
+      if (!pending) return null;
+      if (Date.now() - (pending.at || 0) > 60000) { api.pendingExactRestore = null; return null; }
+      try {
+        if (typeof equivalent === 'function' && equivalent(next, pending.html)) {
+          api.pendingExactRestore = null;
+          return pending.html;
+        }
+      } catch {}
+      return null;
+    },
+  };
+
+  root.__RetKitOriginals = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 (function (root) {
@@ -3474,7 +3684,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.7.0',
+          clientVersion: '0.7.1',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -5238,6 +5448,8 @@
     subjectInput: 'retkit-mo-subject-input',
     rtlButton: 'retkit-mo-rtl-button',
     testButton: 'retkit-mo-test-button',
+    originalButton: 'retkit-mo-original-button',
+    originalPopover: 'retkit-mo-original-popover',
     testPopover: 'retkit-mo-test-popover',
     addLocaleButton: 'retkit-mo-add-locale-button',
     backupLocalesButton: 'retkit-mo-backup-locales-button',
@@ -5612,7 +5824,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.7.0');
+    setTextContentIfChanged(version, 'v0.7.1');
     return true;
   }
 
@@ -5628,7 +5840,7 @@
   }
 
   function closeBridgePopovers(except = '') {
-    for (const id of [IDS.testPopover]) {
+    for (const id of [IDS.testPopover, IDS.originalPopover]) {
       if (id !== except) document.getElementById(id)?.remove();
     }
   }
@@ -8075,6 +8287,12 @@
       const button = makeToolbarButton(IDS.rtlButton, 'RTL Fix', applyRtlFix, 'Toggle RTL on the currently open locale; click again to restore it');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
     }
+    if (!document.getElementById(IDS.originalButton)) {
+      const button = makeToolbarButton(IDS.originalButton, '↶ Original', renderOriginalPopover, 'Return to the version this email had before RetKit first changed it');
+      button.style.display = 'none';
+      bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
+      refreshOriginalButton(true);
+    }
     if (!document.getElementById(IDS.testButton)) {
       const button = makeToolbarButton(IDS.testButton, 'Send test', handOffNativeTestCampaign, 'Open the native MoEngage Test Campaign form');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
@@ -8169,7 +8387,7 @@
     const commit = root.__RetKitMoEngageCore?.commitNativeHtml;
     if (typeof commit !== 'function') return { ok: false, locale: wanted, reason: 'Native commit helper is unavailable' };
     const next = String(html ?? '');
-    const result = await Promise.resolve(commit(next, { fast: true }));
+    const result = await Promise.resolve(commit(next, { fast: true, locale: wanted }));
     return { ok: Boolean(result?.ok), locale: wanted, tentative: true, reason: result?.reason || '' };
   }
 
@@ -8186,7 +8404,7 @@
     // commitThroughFroala(fast:false) already performs two persistence checks
     // after the React/Froala render cycle. Do not pay a second fixed 700ms
     // settle delay here for every locale.
-    const result = await Promise.resolve(commit(next, { fast: false }));
+    const result = await Promise.resolve(commit(next, { fast: false, locale: wanted }));
     const actual = String(getNativeEditorOutsideWorkspace()?.getValue?.() || '');
     const equivalent = root.__RetKitMoEngageCore?.htmlEquivalentForSync;
     const persisted = Boolean(result?.ok) && (typeof equivalent === 'function' ? equivalent(actual, next) : actual === next);
@@ -8260,7 +8478,154 @@
     },
   };
 
+  // ─── Original version (first-touch backup) ────────────────────────────────
+  // The core captures the HTML right before RetKit's first write per campaign +
+  // locale. This button appears only when such a snapshot exists and lets the
+  // user return to it. Snapshots expire on their own (see original-snapshots.js).
+  function originalsApi() {
+    return root.__RetKitOriginals || null;
+  }
+
+  function currentOriginalContext() {
+    const api = originalsApi();
+    if (!api) return null;
+    return { campaign: api.campaignKeyFromUrl(root.location?.href || ''), locale: getActiveLocale() || 'default' };
+  }
+
+  let originalRefreshTick = 0;
+  let originalButtonKey = '';
+  async function refreshOriginalButton(force = false) {
+    const button = document.getElementById(IDS.originalButton);
+    const api = originalsApi();
+    if (!button || !api?.store) return;
+    originalRefreshTick += 1;
+    if (!force && originalRefreshTick % 3 !== 0) return;
+    const context = currentOriginalContext();
+    if (!context) return;
+    const key = api.snapshotKey(context.campaign, context.locale);
+    try {
+      const entry = await api.store.get(context.campaign, context.locale);
+      button.style.display = entry ? '' : 'none';
+      originalButtonKey = entry ? key : '';
+      if (entry) button.title = `Original ${context.locale} from ${formatOriginalTime(entry.capturedAt)} — click to compare or restore`;
+    } catch {
+      button.style.display = 'none';
+    }
+  }
+
+  function formatOriginalTime(ms) {
+    try {
+      return new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return String(new Date(ms));
+    }
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    return value >= 1024 ? `${Math.round(value / 1024)} KB` : `${value} B`;
+  }
+
+  async function renderOriginalPopover() {
+    const existing = document.getElementById(IDS.originalPopover);
+    if (existing) { existing.remove(); return; }
+    closeBridgePopovers(IDS.originalPopover);
+    const api = originalsApi();
+    const context = currentOriginalContext();
+    if (!api?.store || !context) return;
+    const entry = await api.store.get(context.campaign, context.locale);
+    if (!entry) { refreshOriginalButton(true); return; }
+
+    const editor = getOverlayEditor();
+    const core = root.__RetKitMoEngageCore;
+    const current = editor?.getValue?.() || '';
+    const same = Boolean(core?.htmlEquivalentForSync?.(current, entry.html));
+
+    const pop = document.createElement('div');
+    pop.id = IDS.originalPopover;
+    pop.className = 'rk-v050-popover';
+    const head = document.createElement('div');
+    head.className = 'rk-v050-head';
+    const title = document.createElement('strong');
+    title.textContent = `Original · ${entry.locale}`;
+    const close = document.createElement('button');
+    close.className = 'rk-v050-secondary';
+    close.textContent = '×';
+    close.addEventListener('click', () => pop.remove());
+    head.append(title, close);
+
+    const grid = document.createElement('div');
+    grid.className = 'rk-v050-grid';
+    const info = document.createElement('div');
+    info.className = 'rk-v050-hint';
+    info.textContent = `Saved ${formatOriginalTime(entry.capturedAt)} before RetKit's first change · ${formatBytes(entry.bytes)}. `
+      + (same ? 'The email is currently identical to it.' : 'The email has changed since then.')
+      + ' Kept in this browser only; removed automatically after 14 days without use.';
+
+    const row = document.createElement('div');
+    row.className = 'rk-v050-row';
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'rk-v050-primary';
+    restore.textContent = 'Restore original';
+    restore.disabled = same || !editor;
+    restore.addEventListener('click', () => {
+      if (restore.dataset.armed !== '1') {
+        restore.dataset.armed = '1';
+        restore.textContent = 'Click again to restore';
+        setTimeout(() => {
+          if (!restore.isConnected) return;
+          restore.dataset.armed = '';
+          restore.textContent = 'Restore original';
+        }, 4000);
+        return;
+      }
+      api.pendingExactRestore = { html: entry.html, at: Date.now() };
+      const text = core?.beautifyEmailHtml ? core.beautifyEmailHtml(entry.html) : entry.html;
+      const last = editor.lastLine();
+      // An undoable edit: Cmd/Ctrl+Z in the editor brings the newer version back.
+      editor.replaceRange(text, { line: editor.firstLine?.() ?? 0, ch: 0 }, { line: last, ch: (editor.getLine(last) || '').length }, '+retkit-restore-original');
+      diagBreadcrumb?.('original.restore', { locale: entry.locale, bytes: entry.bytes });
+      workspaceStatus(`Restoring original ${entry.locale}… (Cmd/Ctrl+Z undoes it)`, 'neutral');
+      pop.remove();
+    });
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'rk-v050-secondary';
+    copy.textContent = 'Copy original HTML';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(entry.html); copy.textContent = 'Copied'; } catch { copy.textContent = 'Copy failed'; }
+    });
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.className = 'rk-v050-secondary';
+    discard.textContent = 'Forget';
+    discard.title = 'Delete this saved original now';
+    discard.addEventListener('click', async () => {
+      await api.store.discard(context.campaign, context.locale);
+      pop.remove();
+      refreshOriginalButton(true);
+      workspaceStatus(`Saved original ${entry.locale} removed`, 'neutral');
+    });
+    row.append(restore, copy, discard);
+    grid.append(info, row);
+    pop.append(head, grid);
+    document.body.appendChild(pop);
+  }
+
+  function bootOriginals() {
+    const api = originalsApi();
+    if (!api || api.store) return;
+    try {
+      api.store = api.createStore({ version: '0.7.1' }); // version: scripts/version-files.mjs
+      api.contextProvider = currentOriginalContext;
+      api.onChange = () => refreshOriginalButton(true);
+      api.store.prune().catch(() => {});
+    } catch {}
+  }
+
   function bootBridge() {
+    bootOriginals();
     injectBridgeStyle();
     ensureBridgeToolbar();
 
@@ -8270,7 +8635,7 @@
     // ensures the bridge UI exists; locale discovery itself is cached.
     localeTimer = setInterval(() => {
       if (document.hidden) return;
-      if (document.getElementById(IDS.workspace)) { ensureBridgeToolbar(); syncSubjectFromMoEngage(false); }
+      if (document.getElementById(IDS.workspace)) { ensureBridgeToolbar(); syncSubjectFromMoEngage(false); refreshOriginalButton(false); }
       else closeBridgePopovers();
     }, 1200);
 
@@ -8278,7 +8643,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.7.0 loaded');
+    console.log('[RetKit] MoEngage bridge v0.7.1 loaded');
   }
 
   bootBridge();

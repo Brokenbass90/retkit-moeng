@@ -10,6 +10,7 @@ const bridgePath = path.join(root, 'src/moengage/native-bridge.user.js');
 const distPath = path.join(root, 'dist/retkit-moengage.user.js');
 
 const aiModulePaths = [
+  'src/backup/original-snapshots.js',
   'src/ai/shared/protocol.js',
   'src/ai/client/bridge-client.js',
   'src/ai/context/context-adapter.js',

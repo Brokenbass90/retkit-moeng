@@ -1,11 +1,11 @@
 {
   "name": "retkit-moengage",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": false,
   "description": "RetKit userscript for faster HTML email work inside MoEngage.",
   "license": "MIT",
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs && node scripts/export-click-to-source.mjs",
     "test": "node scripts/test.mjs",
     "check": "npm run build && npm test && npm run bridge:test",
     "bridge": "npm --prefix bridge start",
