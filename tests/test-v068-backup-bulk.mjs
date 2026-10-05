@@ -43,7 +43,7 @@ const applyBody = coreSource.slice(applyStart, applyEnd);
 assert.match(applyBody, /readLocaleHtmlFast/, 'bulk apply should read fresh native HTML for every locale');
 assert.doesNotMatch(applyBody, /expectedBefore/, 'bulk apply must not reject because the HTML changed after scan');
 assert.doesNotMatch(applyBody, /verifyLocaleHtmlFast/, 'bulk apply should not perform a second full verification pass');
-assert.match(applyBody, /replaceAllLiteral\(currentHtml|replaceAllLiteral\(freshHtml/, 'bulk apply should replace against the freshly read HTML');
+assert.match(applyBody, /(?:replaceAllLiteral|smartReplace)\(currentHtml|replaceAllLiteral\(freshHtml/, 'bulk apply should replace against the freshly read HTML');
 
 // Locale creation now deliberately hands final confirmation to native MoEngage.
 assert.match(bridgeSource, /handOffNativeLocaleAdd/, 'locale add should retain the native picker handoff');

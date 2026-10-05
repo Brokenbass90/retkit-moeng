@@ -69,3 +69,9 @@ ${body}
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, output);
 console.log(`Built ${path.relative(root, outPath)} (${Buffer.byteLength(output)} bytes)`);
+
+// The smart find/replace core is already standalone: publish it next to the matcher.
+const replaceSrc = path.join(root, 'src/shared/replace-across.js');
+const replaceOut = path.join(root, 'shared/replace-across.js');
+fs.writeFileSync(replaceOut, fs.readFileSync(replaceSrc, 'utf8'));
+console.log(`Built ${path.relative(root, replaceOut)}`);

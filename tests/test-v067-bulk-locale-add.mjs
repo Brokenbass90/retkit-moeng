@@ -4,15 +4,15 @@ import fs from 'node:fs';
 const coreSource = fs.readFileSync(new URL('../src/core/retkit-moengage-core.user.js', import.meta.url), 'utf8');
 const bridgeSource = fs.readFileSync(new URL('../src/moengage/native-bridge.user.js', import.meta.url), 'utf8');
 
-// Bulk replace has its own replacement field; the top Replace field remains current-locale only.
-assert.match(coreSource, /multiLocaleReplaceInput/, 'v0.6.7 should define a dedicated across-locales replacement input');
-assert.match(coreSource, /Replace across locales with…/, 'Across locales should show an explicit replacement field');
+// v0.7.4: one "Replace with…" field for the current locale AND across locales
+// (two fields were easy to mix up). Bulk apply reads the main field.
+assert.doesNotMatch(coreSource, /multiLocaleReplaceInput/, 'the second across-locales replacement field is gone');
 const applyStart = coreSource.indexOf('async function applyMultiLocaleReplace');
 const applyEnd = coreSource.indexOf('\n  async function refreshLocaleManager', applyStart);
 const applyBody = coreSource.slice(applyStart, applyEnd);
 assert.ok(applyStart >= 0, 'bulk apply function should exist');
-assert.match(applyBody, /multiLocaleReplaceInput/, 'bulk apply should read the dedicated replacement field');
-assert.doesNotMatch(applyBody, /document\.getElementById\(IDS\.replaceInput\)/, 'bulk apply must not reuse the current-locale replacement field');
+assert.match(applyBody, /document\.getElementById\(IDS\.replaceInput\)/, 'bulk apply uses the main replacement field');
+assert.match(applyBody, /readLocaleHtmlFast\(item\.locale\)/, 'bulk apply re-reads each locale before writing');
 
 // Bulk apply must use the hidden native writer rather than rebinding RetKit to every locale.
 assert.match(bridgeSource, /setLocaleHtmlFast:/, 'bridge should expose a hidden fast locale writer');

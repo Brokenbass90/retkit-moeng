@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.3
+// @version      0.7.4
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1205,7 +1205,8 @@
     findBar: 'retkit-mo-findbar',
     findInput: 'retkit-mo-find-input',
     replaceInput: 'retkit-mo-replace-input',
-    multiLocaleReplaceInput: 'retkit-mo-multilocale-replace-input',
+    multiLocaleModeToggle: 'retkit-mo-multilocale-mode',
+    multiLocaleDetails: 'retkit-mo-multilocale-details',
     matchCount: 'retkit-mo-match-count',
     status: 'retkit-mo-status',
     split: 'retkit-mo-split',
@@ -1262,6 +1263,7 @@
     searchMarks: [],
     foldMarks: new Map(),
     multiLocalePlan: [],
+    multiLocaleDetailsLocale: '',
     multiLocaleBusy: false,
     multiLocaleCancelRequested: false,
     multiLocaleScanError: '',
@@ -1458,7 +1460,12 @@
       .rk-ml-head strong { flex:1; font-size:13px; }
       .rk-ml-note { color:#8fa2b8; font-size:11px; line-height:1.45; padding:8px 2px; }
       .rk-ml-actions { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; align-items:center; }
-      .rk-ml-actions .rk-ml-replace-input { flex:1 1 320px; min-width:220px; }
+      .rk-ml-mode { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+      #retkit-mo-multilocale-details { display:grid; gap:3px; margin-top:6px; }
+      .rk-ml-hit { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:11.5px; }
+      .rk-ml-kind { color:#8fa3bd; white-space:nowrap; }
+      .rk-ml-hit code { color:#c9d6e6; white-space:pre-wrap; word-break:break-all; font:11px ui-monospace,Menlo,monospace; }
+      .rk-ml-hit mark { background:#5a4a12; color:#ffe9a6; border-radius:2px; }
       #${IDS.multiLocaleRows} { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 0; }
       .rk-ml-row { display:inline-flex; gap:5px; align-items:center; min-height:30px; padding:4px 8px; border:1px solid #2b394b; border-radius:8px; background:#131d2a; font-size:12px; }
       .rk-ml-row[data-disabled="1"] { opacity:.46; }
@@ -1672,7 +1679,7 @@
     const replace = document.getElementById(IDS.replaceInput);
     const query = find?.value || '';
     if (!editor || !query) return;
-    const result = replaceAllLiteral(editor.getValue(), query, replace?.value || '');
+    const result = smartReplace(editor.getValue(), query, replace?.value || '', 'text');
     if (!result.count) {
       status(`Not found: ${query}`, 'warn');
       return;
@@ -1728,6 +1735,37 @@
 
   function multiLocaleBridge() {
     return root.__RetKitMoEngageBridgeApi || null;
+  }
+
+  // Shared smart matcher (src/shared/replace-across.js): & == &amp;, and an
+  // optional "same image file name" mode. Falls back to exact literal matching.
+  function replaceCore() {
+    return root.RetKitReplaceAcross || null;
+  }
+
+  function multiLocaleMode() {
+    const toggle = document.getElementById(IDS.multiLocaleModeToggle);
+    return toggle?.checked ? 'filename' : 'text';
+  }
+
+  function smartReplace(source, query, replacement, mode = 'text') {
+    const ra = replaceCore();
+    if (ra) return ra.replaceIn(source, query, replacement, { mode });
+    return replaceAllLiteral(source, query, replacement);
+  }
+
+  function smartPlan(htmlByLocale, query, locales, mode = 'text') {
+    const ra = replaceCore();
+    const wanted = [...new Set((locales || []).map((l) => String(l || '').trim().toUpperCase()).filter(Boolean))];
+    return wanted.map((locale) => {
+      const html = String(htmlByLocale[locale] ?? '');
+      if (ra) {
+        const scan = ra.scan(html, query, { mode, maxHits: 6 });
+        return { locale, count: scan.count, changed: scan.count > 0, hits: scan.hits };
+      }
+      const count = findAllLiteral(html, query).length;
+      return { locale, count, changed: count > 0, hits: [] };
+    });
   }
 
   function setMultiLocaleLoading(message = '') {
@@ -1834,10 +1872,20 @@
       checkbox.disabled = item.count === 0;
       const locale = document.createElement('strong');
       locale.textContent = item.count ? `${item.locale} · ${item.count}` : item.locale;
-      row.title = item.count ? `${item.count} exact match${item.count === 1 ? '' : 'es'}` : 'Not found';
+      row.title = item.count ? `${item.count} match${item.count === 1 ? '' : 'es'} · click the name to see where` : 'Not found';
+      locale.addEventListener('click', (event) => {
+        if (!item.count) return;
+        event.preventDefault();
+        renderMultiLocaleDetails(item.locale);
+      });
+      locale.style.cursor = item.count ? 'pointer' : '';
       row.append(checkbox, locale);
       host.appendChild(row);
     }
+    const detailsLocale = STATE.multiLocalePlan.find((item) => item.locale === STATE.multiLocaleDetailsLocale && item.count)?.locale
+      || STATE.multiLocalePlan.find((item) => item.count)?.locale;
+    if (detailsLocale) renderMultiLocaleDetails(detailsLocale);
+    else document.getElementById(IDS.multiLocaleDetails)?.replaceChildren();
     const refreshApply = () => {
       const selected = [...host.querySelectorAll('[data-rk-locale-select]:checked')];
       const enabled = [...host.querySelectorAll('[data-rk-locale-select]:not(:disabled)')];
@@ -1924,7 +1972,8 @@
         STATE.multiLocaleRescanPending = true;
         return;
       }
-      STATE.multiLocalePlan = buildLocaleReplacePlan(htmlByLocale, query, replacement, locales);
+      STATE.multiLocalePlan = smartPlan(htmlByLocale, query, locales, multiLocaleMode());
+      void replacement;
       renderMultiLocalePlanRows();
       const summary = summarizeLocaleReplacePlan(STATE.multiLocalePlan);
       status(`Found ${summary.totalMatches} matches in ${summary.matchedLocales}/${summary.localeCount} locales`, summary.totalMatches ? 'ok' : 'warn');
@@ -1985,9 +2034,10 @@
       return;
     }
     const find = document.getElementById(IDS.findInput);
-    const bulkReplace = document.getElementById(IDS.multiLocaleReplaceInput);
+    const replaceField = document.getElementById(IDS.replaceInput);
     const query = String(find?.value || '');
-    const replacement = String(bulkReplace?.value || '');
+    const replacement = String(replaceField?.value || '');
+    const mode = multiLocaleMode();
     const items = selectedMultiLocaleItems();
     if (!query || !items.length) {
       status('Select at least one locale with matches', 'warn');
@@ -2006,7 +2056,7 @@
         setMultiLocaleLoading(`Replacing locales ${index + 1}/${items.length}…`);
         updateMultiLocaleRowState(item.locale, `reading ${index + 1}/${items.length}…`);
         const currentHtml = String(await Promise.resolve(bridge.readLocaleHtmlFast(item.locale)) || '');
-        const result = replaceAllLiteral(currentHtml, query, replacement);
+        const result = smartReplace(currentHtml, query, replacement, mode);
         if (!result.count) {
           updateMultiLocaleRowState(item.locale, 'no current matches', 'warn');
           continue;
@@ -2021,11 +2071,11 @@
         updateMultiLocaleRowState(item.locale, `✓ ${result.count}`, 'ok');
       }
         const totalMatches = applied.reduce((sum, item) => sum + item.count, 0);
-      status(`Replaced ${totalMatches} matches in ${applied.length} locales`, applied.length ? 'ok' : 'warn');
+      status(`Replaced ${totalMatches} matches in ${applied.length} locales · ↶ Original keeps each locale's first version`, applied.length ? 'ok' : 'warn');
       diagBreadcrumb('multilocale.apply.done', { localeCount: applied.length, totalMatches, mode: 'native-hidden-stable' });
       scheduleMultiLocaleAutoScan(120);
     } catch (error) {
-        diagIncident('multilocale_apply_failed', error?.message || String(error), { appliedLocales: applied.map((item) => item.locale), mode: 'native-hidden-stable' });
+          diagIncident('multilocale_apply_failed', error?.message || String(error), { appliedLocales: applied.map((item) => item.locale), mode: 'native-hidden-stable' });
       status(`Bulk replace stopped: ${error?.message || error}`, 'error');
     } finally {
       await restoreMultiLocaleOrigin(origin);
@@ -2136,30 +2186,75 @@
       head.className = 'rk-ml-head';
       const title = document.createElement('strong');
       title.textContent = 'Across locales';
+      const modeLabel = document.createElement('label');
+      modeLabel.className = 'rk-ml-note rk-ml-mode';
+      modeLabel.title = 'Each locale may host the same picture under its own upload path. This finds every URL ending with the same file name and replaces the whole URL.';
+      const modeToggle = document.createElement('input');
+      modeToggle.type = 'checkbox';
+      modeToggle.id = IDS.multiLocaleModeToggle;
+      modeToggle.addEventListener('change', () => scheduleMultiLocaleAutoScan(0));
+      modeLabel.append(modeToggle, document.createTextNode(' Same image by file name'));
       const note = document.createElement('span');
       note.className = 'rk-ml-note';
-      note.textContent = 'Exact matches only';
-      head.append(title, note);
+      note.textContent = '& = &amp;';
+      note.title = 'A link with & also matches its &amp; form; the replacement keeps the encoding it replaces.';
+      head.append(title, modeLabel, note);
       drawer.appendChild(head);
       const rows = document.createElement('div');
       rows.id = IDS.multiLocaleRows;
       drawer.appendChild(rows);
+      const details = document.createElement('div');
+      details.id = IDS.multiLocaleDetails;
+      drawer.appendChild(details);
       const actions = document.createElement('div');
       actions.className = 'rk-ml-actions';
-      const bulkReplace = document.createElement('input');
-      bulkReplace.id = IDS.multiLocaleReplaceInput;
-      bulkReplace.className = 'rk-find-input rk-ml-replace-input';
-      bulkReplace.placeholder = 'Replace across locales with…';
-      bulkReplace.autocomplete = 'off';
+      const hint = document.createElement('span');
+      hint.className = 'rk-ml-note';
+      hint.textContent = 'Uses the “Replace with…” field above.';
       const apply = makeButton('Replace across locales', applyMultiLocaleReplace);
       apply.dataset.rkMultilocaleApply = '1';
       apply.classList.add('rk-find-mini');
       apply.disabled = true;
-      actions.append(bulkReplace, apply);
+      actions.append(hint, apply);
       drawer.appendChild(actions);
       bar.insertAdjacentElement('afterend', drawer);
     }
+    const modeLabel = drawer.querySelector('.rk-ml-mode');
+    const ra = replaceCore();
+    if (modeLabel) modeLabel.style.display = ra?.looksLikeImage?.(query) ? '' : 'none';
+    const modeToggle = document.getElementById(IDS.multiLocaleModeToggle);
+    if (modeToggle && modeLabel?.style.display === 'none') modeToggle.checked = false;
     renderMultiLocalePlanRows();
+  }
+
+  // Where exactly the matches are in one locale: kind + highlighted context.
+  function renderMultiLocaleDetails(locale) {
+    const host = document.getElementById(IDS.multiLocaleDetails);
+    if (!host) return;
+    host.replaceChildren();
+    const item = STATE.multiLocalePlan.find((entry) => entry.locale === locale);
+    if (!item || !item.count) return;
+    STATE.multiLocaleDetailsLocale = locale;
+    const KIND = { image: 'image', link: 'link', background: 'background', attribute: 'attribute', text: 'text' };
+    for (const hit of (item.hits || []).slice(0, 6)) {
+      const line = document.createElement('div');
+      line.className = 'rk-ml-hit';
+      const kind = document.createElement('span');
+      kind.className = 'rk-ml-kind';
+      kind.textContent = `${locale} · ${KIND[hit.kind] || 'text'}`;
+      const code = document.createElement('code');
+      const mark = document.createElement('mark');
+      mark.textContent = hit.match;
+      code.append(document.createTextNode(`…${String(hit.before || '').slice(-40)}`), mark, document.createTextNode(`${String(hit.after || '').slice(0, 40)}…`));
+      line.append(kind, code);
+      host.appendChild(line);
+    }
+    if (item.count > (item.hits || []).length) {
+      const more = document.createElement('div');
+      more.className = 'rk-ml-note';
+      more.textContent = `+${item.count - item.hits.length} more in ${locale}`;
+      host.appendChild(more);
+    }
   }
 
   function buildFindBar(editorPane) {
@@ -2325,7 +2420,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.3</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.4</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2350,7 +2445,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.7.3',
+        version: '0.7.4',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3340,10 +3435,194 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.7.3 loaded');
+    console.log('[RetKit] MoEngage workspace v0.7.4 loaded');
   }
 
   boot();
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+/*! RetKit replace-across — one smart find/replace core for every RetKit tool
+ *  (RetKit for MoEngage, Retention Future Studio, model tools).
+ *  Pure logic, no DOM. Source of truth: retkit-moeng/src/shared/replace-across.js
+ *
+ *  Modes:
+ *   - 'text'     : literal text, but & and &amp; are the same (and the
+ *                  replacement keeps the encoding of what it replaces);
+ *   - 'filename' : for images/files — finds every URL that ends with the same
+ *                  file name (icon1.png) even if each locale uploaded it to a
+ *                  different path, and replaces the whole URL.
+ */
+(function (root) {
+  'use strict';
+
+  const MAX_HITS = 20;
+  const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const encodeAmp = (s) => String(s).replace(/&(?!(?:amp|lt|gt|quot|apos|#39|#\d+|#x[0-9a-f]+);)/gi, '&amp;');
+  const decodeAmp = (s) => String(s).replace(/&amp;/gi, '&');
+  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i;
+
+  function fileNameOf(value) {
+    const text = String(value || '').trim().split(/[?#]/)[0];
+    const name = text.split('/').pop() || '';
+    return /\.[a-z0-9]{2,5}$/i.test(name) ? name : '';
+  }
+
+  // Can the filename mode help? (the query is an image URL or an image file name)
+  function looksLikeImage(find) {
+    return IMAGE_EXT.test(fileNameOf(find));
+  }
+
+  function variants(find) {
+    const needle = String(find || '');
+    if (!needle) return [];
+    const list = [
+      { needle, encode: (r) => r },
+      { needle: encodeAmp(needle), encode: encodeAmp },
+      { needle: decodeAmp(needle), encode: decodeAmp },
+    ];
+    const seen = new Set();
+    return list.filter((v) => v.needle && !seen.has(v.needle) && seen.add(v.needle))
+      .sort((a, b) => b.needle.length - a.needle.length);
+  }
+
+  // Returns { re, encodeFor(hit) } or null.
+  function compile(find, mode = 'text') {
+    if (mode === 'filename') {
+      const name = fileNameOf(find);
+      if (!name) return null;
+      const re = new RegExp(`(?:https?:)?//[^\\s"'()<>]*?/${escapeRegExp(name)}(?:[?#][^\\s"'()<>]*)?(?=[\\s"'()<>]|$)`, 'gi');
+      return { re, encodeFor: (hit) => (/&amp;/i.test(hit) ? encodeAmp : (r) => r) };
+    }
+    const vs = variants(find);
+    if (!vs.length) return null;
+    const byNeedle = new Map(vs.map((v) => [v.needle, v.encode]));
+    return { re: new RegExp(vs.map((v) => escapeRegExp(v.needle)).join('|'), 'g'), encodeFor: (hit) => byNeedle.get(hit) || ((r) => r) };
+  }
+
+  function kindAt(text, index) {
+    const before = text.slice(Math.max(0, index - 60), index).toLowerCase();
+    if (/\bsrc(?:set)?\s*=\s*["']?[^"'>]*$/.test(before)) return 'image';
+    if (/url\(\s*["']?[^)"']*$/.test(before)) return 'background';
+    if (/\bhref\s*=\s*["']?[^"'>]*$/.test(before)) return 'link';
+    if (/<[^>]*$/.test(before)) return 'attribute';
+    return 'text';
+  }
+
+  // { count, hits: [{ index, match, kind, before, after }] }
+  function scan(text, find, options = {}) {
+    const source = String(text ?? '');
+    const compiled = compile(find, options.mode);
+    const out = { count: 0, hits: [] };
+    if (!compiled) return out;
+    const radius = Number(options.radius) || 40;
+    for (const m of source.matchAll(compiled.re)) {
+      out.count += 1;
+      if (out.hits.length < (options.maxHits || MAX_HITS)) {
+        out.hits.push({
+          index: m.index,
+          match: m[0],
+          kind: kindAt(source, m.index),
+          before: source.slice(Math.max(0, m.index - radius), m.index),
+          after: source.slice(m.index + m[0].length, m.index + m[0].length + radius),
+        });
+      }
+    }
+    return out;
+  }
+
+  function countIn(text, find, options = {}) {
+    const compiled = compile(find, options.mode);
+    if (!compiled) return 0;
+    return (String(text ?? '').match(compiled.re) || []).length;
+  }
+
+  // Single pass: a replacement that contains the needle is never re-matched.
+  function replaceIn(text, find, replacement, options = {}) {
+    const source = String(text ?? '');
+    const compiled = compile(find, options.mode);
+    if (!compiled) return { value: source, count: 0 };
+    let count = 0;
+    const value = source.replace(compiled.re, (hit) => {
+      count += 1;
+      return compiled.encodeFor(hit)(String(replacement ?? ''));
+    });
+    return { value, count };
+  }
+
+  // ── Studio shape: code + namespaces { id, name, builtin?, locales: { code: [blocks] } } ──
+  function plan({ code = '', namespaces = [], find = '', mode = 'text' } = {}) {
+    const result = { find: String(find || ''), mode, code: null, locales: [], total: 0, editableTotal: 0 };
+    if (!result.find) return result;
+    const codeScan = scan(code, find, { mode });
+    result.code = { count: codeScan.count, hits: codeScan.hits };
+    result.total += codeScan.count;
+    result.editableTotal += codeScan.count;
+    for (const ns of namespaces || []) {
+      if (!ns || !ns.locales) continue;
+      for (const [locale, blocks] of Object.entries(ns.locales)) {
+        const list = Array.isArray(blocks) ? blocks : [];
+        let count = 0;
+        const hits = [];
+        const blockIndexes = [];
+        list.forEach((block, index) => {
+          const s = scan(block, find, { mode, maxHits: 5 });
+          if (!s.count) return;
+          count += s.count;
+          blockIndexes.push(index);
+          for (const hit of s.hits) if (hits.length < 5) hits.push({ ...hit, block: index });
+        });
+        if (!count) continue;
+        const locked = Boolean(ns.builtin);
+        result.locales.push({ nsId: ns.id, nsName: ns.name, locale, count, blockIndexes, hits, locked });
+        result.total += count;
+        if (!locked) result.editableTotal += count;
+      }
+    }
+    result.locales.sort((a, b) => (a.nsName === b.nsName ? a.locale.localeCompare(b.locale) : a.nsName.localeCompare(b.nsName)));
+    return result;
+  }
+
+  // selection: { code: bool, locales: Set|Array of 'nsId|locale' }
+  function apply({ code = '', namespaces = [], find = '', replacement = '', mode = 'text', selection = {} } = {}) {
+    const out = { code, codeCount: 0, patches: [], undo: { code, locales: [] }, total: 0 };
+    if (selection.code) {
+      const r = replaceIn(code, find, replacement, { mode });
+      out.code = r.value;
+      out.codeCount = r.count;
+      out.total += r.count;
+    }
+    const wanted = selection.locales instanceof Set ? selection.locales : new Set(selection.locales || []);
+    for (const ns of namespaces || []) {
+      if (!ns || ns.builtin || !ns.locales) continue;
+      for (const [locale, blocks] of Object.entries(ns.locales)) {
+        if (!wanted.has(`${ns.id}|${locale}`)) continue;
+        const before = Array.isArray(blocks) ? blocks.slice() : [];
+        let count = 0;
+        const after = before.map((block) => {
+          const r = replaceIn(block, find, replacement, { mode });
+          count += r.count;
+          return r.value;
+        });
+        if (!count) continue;
+        out.patches.push({ nsId: ns.id, locale, blocks: after, count });
+        out.undo.locales.push({ nsId: ns.id, locale, blocks: before });
+        out.total += count;
+      }
+    }
+    return out;
+  }
+
+  // ── MoEngage shape: { LOCALE: html } ──
+  function planLocales(htmlByLocale = {}, find = '', options = {}) {
+    return Object.entries(htmlByLocale || {}).map(([locale, html]) => {
+      const s = scan(html, find, { mode: options.mode, maxHits: 5 });
+      return { locale, count: s.count, hits: s.hits };
+    });
+  }
+
+  root.RetKitReplaceAcross = {
+    version: 2, MAX_HITS, fileNameOf, looksLikeImage, variants, scan, countIn, replaceIn, plan, apply, planLocales,
+  };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 (function (root) {
@@ -3684,7 +3963,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.7.3',
+          clientVersion: '0.7.4',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -5824,7 +6103,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.7.3');
+    setTextContentIfChanged(version, 'v0.7.4');
     return true;
   }
 
@@ -8617,7 +8896,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.7.3' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.7.4' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -8643,7 +8922,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.7.3 loaded');
+    console.log('[RetKit] MoEngage bridge v0.7.4 loaded');
   }
 
   bootBridge();
