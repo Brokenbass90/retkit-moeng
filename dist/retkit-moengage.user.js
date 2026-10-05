@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.4
+// @version      0.7.5
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -2420,7 +2420,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.4</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.5</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2445,7 +2445,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.7.4',
+        version: '0.7.5',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3372,7 +3372,40 @@
     return { supported: false, reason: 'Automatic preview screenshot capture is unavailable for cross-origin email assets; attach or paste a screenshot into RetKit AI.' };
   }
 
+  // Models use the same ⌘F → Across locales flow as people: RetKit fills the
+  // find bar, scans every locale and shows the chips. Writing stays a user click.
+  async function aiAcrossLocales({ query = '', replacement, mode = 'text' } = {}) {
+    const text = String(query || '');
+    if (!text) throw new Error('query is empty');
+    if (!document.getElementById(IDS.findBar)?.classList.contains('rk-open')) openFindBar();
+    const find = document.getElementById(IDS.findInput);
+    const replace = document.getElementById(IDS.replaceInput);
+    if (find) find.value = text;
+    if (replace && replacement !== undefined) replace.value = String(replacement ?? '');
+    updateSearchHighlights(text, -1);
+    renderMultiLocaleDrawer(true);
+    const toggle = document.getElementById(IDS.multiLocaleModeToggle);
+    if (toggle) toggle.checked = mode === 'filename' && Boolean(replaceCore()?.looksLikeImage?.(text));
+    clearTimeout(STATE.multiLocaleAutoScanTimer);
+    for (let i = 0; i < 100 && STATE.multiLocaleBusy; i += 1) await sleep(150);
+    await scanMultiLocaleReplace();
+    const summary = summarizeLocaleReplacePlan(STATE.multiLocalePlan);
+    return {
+      query: text,
+      mode: multiLocaleMode(),
+      ...summary,
+      locales: STATE.multiLocalePlan.map((item) => ({
+        locale: item.locale,
+        count: item.count,
+        hits: (item.hits || []).slice(0, 3).map((hit) => ({ kind: hit.kind, context: `${String(hit.before).slice(-30)}[[${hit.match}]]${String(hit.after).slice(0, 30)}` })),
+      })),
+      imageModeAvailable: Boolean(replaceCore()?.looksLikeImage?.(text)),
+      error: STATE.multiLocaleScanError || undefined,
+    };
+  }
+
   root.__RetKitAiWorkspaceApi = {
+    acrossLocales: aiAcrossLocales,
     getCurrentHtml: () => STATE.overlayEditor?.getValue?.() || '',
     setHtml: aiSetHtml,
     getSelectedSource: aiGetSelectedSource,
@@ -3435,7 +3468,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.7.4 loaded');
+    console.log('[RetKit] MoEngage workspace v0.7.5 loaded');
   }
 
   boot();
@@ -3963,7 +3996,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.7.4',
+          clientVersion: '0.7.5',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -4238,6 +4271,15 @@
           cancel: () => cancelProposal(proposal.id),
         });
         return { proposalId: proposal.id, status: proposal.status };
+      }
+      case 'find_across_locales':
+        if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales search is unavailable');
+        return await api.acrossLocales({ query: args.query, mode: args.mode });
+      case 'propose_replace_across_locales': {
+        if (mode === 'ask') throw proposalError('MODE_DENIED', 'Ask mode does not allow change proposals');
+        if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales replace is unavailable');
+        const plan = await api.acrossLocales({ query: args.search, replacement: String(args.replace ?? ''), mode: args.mode });
+        return { ...plan, status: 'awaiting_user', note: 'RetKit filled ⌘F with this search/replacement and scanned every locale. The user reviews the chips and clicks “Replace … in … locales”; the model cannot write to MoEngage by itself.' };
       }
       case 'apply_approved_patch':
         throw proposalError('USER_APPROVAL_REQUIRED', 'AI cannot approve its own proposal');
@@ -6103,7 +6145,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.7.4');
+    setTextContentIfChanged(version, 'v0.7.5');
     return true;
   }
 
@@ -8896,7 +8938,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.7.4' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.7.5' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -8922,7 +8964,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.7.4 loaded');
+    console.log('[RetKit] MoEngage bridge v0.7.5 loaded');
   }
 
   bootBridge();

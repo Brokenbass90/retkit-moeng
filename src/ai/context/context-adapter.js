@@ -198,6 +198,15 @@
         });
         return { proposalId: proposal.id, status: proposal.status };
       }
+      case 'find_across_locales':
+        if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales search is unavailable');
+        return await api.acrossLocales({ query: args.query, mode: args.mode });
+      case 'propose_replace_across_locales': {
+        if (mode === 'ask') throw proposalError('MODE_DENIED', 'Ask mode does not allow change proposals');
+        if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales replace is unavailable');
+        const plan = await api.acrossLocales({ query: args.search, replacement: String(args.replace ?? ''), mode: args.mode });
+        return { ...plan, status: 'awaiting_user', note: 'RetKit filled ⌘F with this search/replacement and scanned every locale. The user reviews the chips and clicks “Replace … in … locales”; the model cannot write to MoEngage by itself.' };
+      }
       case 'apply_approved_patch':
         throw proposalError('USER_APPROVAL_REQUIRED', 'AI cannot approve its own proposal');
       case 'undo_last_ai_change':
