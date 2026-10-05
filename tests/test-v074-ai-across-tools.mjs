@@ -15,3 +15,9 @@ const fn = core.slice(core.indexOf('async function aiAcrossLocales'), core.index
 assert.match(fn, /scanMultiLocaleReplace\(\)/);
 assert.doesNotMatch(fn, /applyMultiLocaleReplace\(/);
 console.log('✓ AI across-locales tools: find + user-approved replace');
+
+// Own replacement per locale: the bulk apply takes the locale's own value first.
+const applyBody = core.slice(core.indexOf('async function applyMultiLocaleReplace'), core.indexOf('\n  async function refreshLocaleManager'));
+assert.match(applyBody, /multiLocaleOverrides/, 'bulk apply honours per-locale values');
+assert.match(core, /data-rk-locale-override|dataset\.rkLocaleOverride/, 'details panel has a per-locale input');
+console.log('✓ per-locale replacement values');

@@ -204,7 +204,7 @@
       case 'propose_replace_across_locales': {
         if (mode === 'ask') throw proposalError('MODE_DENIED', 'Ask mode does not allow change proposals');
         if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales replace is unavailable');
-        const plan = await api.acrossLocales({ query: args.search, replacement: String(args.replace ?? ''), mode: args.mode });
+        const plan = await api.acrossLocales({ query: args.search, replacement: String(args.replace ?? ''), mode: args.mode, perLocale: args.perLocale && typeof args.perLocale === 'object' ? args.perLocale : null });
         return { ...plan, status: 'awaiting_user', note: 'RetKit filled ⌘F with this search/replacement and scanned every locale. The user reviews the chips and clicks “Replace … in … locales”; the model cannot write to MoEngage by itself.' };
       }
       case 'apply_approved_patch':

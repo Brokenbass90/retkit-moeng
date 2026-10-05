@@ -45,6 +45,11 @@ assert.equal(r.code, '<img src="https://z.com/b"><a href="https://z.com/b">x</a>
 assert.deepEqual(plain(r.patches), [{ nsId: 'n1', locale: 'en', blocks: ['Hello', 'Visit https://z.com/b'], count: 1 }]);
 assert.equal(namespaces[0].locales.en[1], 'Visit https://x.com/a', 'pure');
 
+// Own value per place (e.g. a localized banner per locale).
+const own = RA.apply({ code, namespaces, find: 'https://x.com/a', replacement: 'https://all.com', selection: { code: true, locales: ['n1|en', 'n1|ar'] }, replacements: { 'n1|ar': 'https://ar.com' } });
+assert.equal(own.code, '<img src="https://all.com"><a href="https://all.com">x</a>');
+assert.deepEqual(plain(own.patches.map((p) => [p.locale, p.blocks.join(' ')])), [['en', 'Hello Visit https://all.com'], ['ar', 'https://ar.com']]);
+
 // MoEngage shape: { LOCALE: html }
 assert.deepEqual(plain(RA.planLocales({ EN: en, AR: ar }, 'icon1.png', { mode: 'filename' }).map((x) => [x.locale, x.count])), [['EN', 1], ['AR', 1]]);
 console.log('✓ replace-across core: &amp;-aware, filename mode, kinds, studio + MoEngage shapes');

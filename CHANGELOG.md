@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.6 — своя замена для каждой локали
+
+- ⌘F → Across locales: клик по локали → поле «{LOCALE}: replace with». Пусто — общая замена из «Replace with…», заполнено — своя для этой локали (например, локализованный баннер). Метка локали получает ✎.
+- `propose_replace_across_locales` принимает `perLocale` ({"AR": "…"}).
+
 ## 0.7.5 — модели умеют «во всех локалях»
 
 - `npm run bridge:install` (macOS): bridge стартует вместе с Mac и работает в фоне, терминал не нужен; `bridge:status`, `bridge:uninstall`.

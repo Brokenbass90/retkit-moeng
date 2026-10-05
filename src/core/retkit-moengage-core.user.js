@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.5
+// @version      0.7.6
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -953,6 +953,9 @@
     foldMarks: new Map(),
     multiLocalePlan: [],
     multiLocaleDetailsLocale: '',
+    // Per-locale replacement overrides for the current query: { LOCALE: value }.
+    multiLocaleOverrides: {},
+    multiLocaleOverridesQuery: '',
     multiLocaleBusy: false,
     multiLocaleCancelRequested: false,
     multiLocaleScanError: '',
@@ -1149,6 +1152,8 @@
       .rk-ml-head strong { flex:1; font-size:13px; }
       .rk-ml-note { color:#8fa2b8; font-size:11px; line-height:1.45; padding:8px 2px; }
       .rk-ml-actions { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; align-items:center; }
+      .rk-ml-own { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:center; margin-bottom:4px; }
+      .rk-ml-own .rk-find-input { min-width:0; }
       .rk-ml-mode { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
       #retkit-mo-multilocale-details { display:grid; gap:3px; margin-top:6px; }
       .rk-ml-hit { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:baseline; font-size:11.5px; }
@@ -1560,7 +1565,7 @@
       checkbox.checked = item.count > 0;
       checkbox.disabled = item.count === 0;
       const locale = document.createElement('strong');
-      locale.textContent = item.count ? `${item.locale} · ${item.count}` : item.locale;
+      locale.textContent = item.count ? `${item.locale} · ${item.count}${Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale) ? ' ✎' : ''}` : item.locale;
       row.title = item.count ? `${item.count} match${item.count === 1 ? '' : 'es'} · click the name to see where` : 'Not found';
       locale.addEventListener('click', (event) => {
         if (!item.count) return;
@@ -1662,6 +1667,10 @@
         return;
       }
       STATE.multiLocalePlan = smartPlan(htmlByLocale, query, locales, multiLocaleMode());
+      if (STATE.multiLocaleOverridesQuery !== query) {
+        STATE.multiLocaleOverrides = {};
+        STATE.multiLocaleOverridesQuery = query;
+      }
       void replacement;
       renderMultiLocalePlanRows();
       const summary = summarizeLocaleReplacePlan(STATE.multiLocalePlan);
@@ -1745,7 +1754,9 @@
         setMultiLocaleLoading(`Replacing locales ${index + 1}/${items.length}…`);
         updateMultiLocaleRowState(item.locale, `reading ${index + 1}/${items.length}…`);
         const currentHtml = String(await Promise.resolve(bridge.readLocaleHtmlFast(item.locale)) || '');
-        const result = smartReplace(currentHtml, query, replacement, mode);
+        const own = Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale)
+          ? String(STATE.multiLocaleOverrides[item.locale]) : null;
+        const result = smartReplace(currentHtml, query, own ?? replacement, mode);
         if (!result.count) {
           updateMultiLocaleRowState(item.locale, 'no current matches', 'warn');
           continue;
@@ -1924,6 +1935,25 @@
     const item = STATE.multiLocalePlan.find((entry) => entry.locale === locale);
     if (!item || !item.count) return;
     STATE.multiLocaleDetailsLocale = locale;
+    const own = document.createElement('div');
+    own.className = 'rk-ml-own';
+    const ownLabel = document.createElement('span');
+    ownLabel.className = 'rk-ml-kind';
+    ownLabel.textContent = `${locale}: replace with`;
+    const ownInput = document.createElement('input');
+    ownInput.className = 'rk-find-input';
+    ownInput.dataset.rkLocaleOverride = locale;
+    ownInput.placeholder = 'empty = same as “Replace with…” above';
+    ownInput.autocomplete = 'off';
+    ownInput.value = Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, locale) ? STATE.multiLocaleOverrides[locale] : '';
+    ownInput.addEventListener('input', () => {
+      if (ownInput.value === '') delete STATE.multiLocaleOverrides[locale];
+      else STATE.multiLocaleOverrides[locale] = ownInput.value;
+      const chip = document.querySelector(`#${IDS.multiLocaleRows} [data-locale="${locale}"] strong`);
+      if (chip) chip.textContent = `${locale} · ${item.count}${ownInput.value !== '' ? ' ✎' : ''}`;
+    });
+    own.append(ownLabel, ownInput);
+    host.appendChild(own);
     const KIND = { image: 'image', link: 'link', background: 'background', attribute: 'attribute', text: 'text' };
     for (const hit of (item.hits || []).slice(0, 6)) {
       const line = document.createElement('div');
@@ -2109,7 +2139,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.5</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.7.6</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2134,7 +2164,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.7.5',
+        version: '0.7.6',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3063,7 +3093,7 @@
 
   // Models use the same ⌘F → Across locales flow as people: RetKit fills the
   // find bar, scans every locale and shows the chips. Writing stays a user click.
-  async function aiAcrossLocales({ query = '', replacement, mode = 'text' } = {}) {
+  async function aiAcrossLocales({ query = '', replacement, mode = 'text', perLocale = null } = {}) {
     const text = String(query || '');
     if (!text) throw new Error('query is empty');
     if (!document.getElementById(IDS.findBar)?.classList.contains('rk-open')) openFindBar();
@@ -3078,8 +3108,15 @@
     clearTimeout(STATE.multiLocaleAutoScanTimer);
     for (let i = 0; i < 100 && STATE.multiLocaleBusy; i += 1) await sleep(150);
     await scanMultiLocaleReplace();
+    if (perLocale && typeof perLocale === 'object') {
+      STATE.multiLocaleOverrides = {};
+      for (const [locale, value] of Object.entries(perLocale)) STATE.multiLocaleOverrides[String(locale).toUpperCase()] = String(value ?? '');
+      STATE.multiLocaleOverridesQuery = text;
+      renderMultiLocalePlanRows();
+    }
     const summary = summarizeLocaleReplacePlan(STATE.multiLocalePlan);
     return {
+      overrides: { ...STATE.multiLocaleOverrides },
       query: text,
       mode: multiLocaleMode(),
       ...summary,
@@ -3157,7 +3194,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.7.5 loaded');
+    console.log('[RetKit] MoEngage workspace v0.7.6 loaded');
   }
 
   boot();

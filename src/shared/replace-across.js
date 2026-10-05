@@ -140,10 +140,13 @@
   }
 
   // selection: { code: bool, locales: Set|Array of 'nsId|locale' }
-  function apply({ code = '', namespaces = [], find = '', replacement = '', mode = 'text', selection = {} } = {}) {
+  // replacements: optional own value per place: { code: '…', 'nsId|locale': '…' }
+  function apply({ code = '', namespaces = [], find = '', replacement = '', mode = 'text', selection = {}, replacements = null } = {}) {
     const out = { code, codeCount: 0, patches: [], undo: { code, locales: [] }, total: 0 };
+    const own = replacements && typeof replacements === 'object' ? replacements : {};
+    const valueFor = (key) => (Object.prototype.hasOwnProperty.call(own, key) ? String(own[key]) : replacement);
     if (selection.code) {
-      const r = replaceIn(code, find, replacement, { mode });
+      const r = replaceIn(code, find, valueFor('code'), { mode });
       out.code = r.value;
       out.codeCount = r.count;
       out.total += r.count;
@@ -155,8 +158,9 @@
         if (!wanted.has(`${ns.id}|${locale}`)) continue;
         const before = Array.isArray(blocks) ? blocks.slice() : [];
         let count = 0;
+        const value = valueFor(`${ns.id}|${locale}`);
         const after = before.map((block) => {
-          const r = replaceIn(block, find, replacement, { mode });
+          const r = replaceIn(block, find, value, { mode });
           count += r.count;
           return r.value;
         });
