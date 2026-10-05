@@ -12,7 +12,7 @@ export const RETKIT_TOOL_SPECS = [
   { name: 'get_selected_source', description: 'Read the currently selected HTML source fragment.', inputSchema: object() },
   { name: 'get_validator_issues', description: 'Read current RetKit HTML validator issues.', inputSchema: object() },
   { name: 'get_preview_dom', description: 'Read serialized DOM from the current rendered preview.', inputSchema: object({ maxChars: { type: 'number' } }) },
-  { name: 'get_preview_screenshot', description: 'Attempt a current preview screenshot; returns an explicit unsupported reason when browser capture is unavailable.', inputSchema: object() },
+  { name: 'get_preview_screenshot', description: 'LOOK at the email: renders the current RetKit preview (active locale) to a PNG with the local Chrome and returns it. Use before judging layout; check mobile separately.', inputSchema: object({ view: { type: 'string', enum: ['desktop', 'mobile'] }, height: { type: 'number' } }) },
   { name: 'get_email_context_summary', description: 'Read a compact summary of HTML, subject, locale, selection and validation state.', inputSchema: object() },
   { name: 'switch_locale', description: 'Switch the RetKit/MoEngage editor to a locale.', inputSchema: object({ locale: { type: 'string' } }, ['locale']) },
   { name: 'propose_html_patch', description: 'Propose complete replacement HTML based on a freshness hash. The user must approve it in RetKit.', inputSchema: object({ baseHash: { type: 'string' }, html: { type: 'string' }, summary: { type: 'string' } }, ['baseHash', 'html']) },

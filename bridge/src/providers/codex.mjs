@@ -124,7 +124,10 @@ export function toolResultToRpcResponse(rpcId, payload = {}) {
   return {
     id: rpcId,
     result: {
-      contentItems: [{ type: 'inputText', text: JSON.stringify(value ?? null) }],
+      contentItems: [
+        { type: 'inputText', text: JSON.stringify(value ?? null) },
+        ...(success && payload.imageDataUrl ? [{ type: 'inputImage', imageUrl: payload.imageDataUrl }] : []),
+      ],
       success,
     },
   };
@@ -223,7 +226,7 @@ export class CodexProvider {
     this.rpc.on('closed', () => { this.queue?.end(); this.queue = null; });
 
     await this.rpc.request('initialize', {
-      clientInfo: { name: 'retkit_ai', title: 'RetKit AI Workbench', version: '0.7.1' },
+      clientInfo: { name: 'retkit_ai', title: 'RetKit AI Workbench', version: '0.7.2' },
       capabilities: { experimentalApi: true },
     });
     this.rpc.notify('initialized', {});
@@ -279,7 +282,13 @@ export class CodexProvider {
     const rpcId = this.pendingToolRpc.get(String(callId));
     if (rpcId == null) throw new Error(`Unknown Codex tool call: ${callId}`);
     this.pendingToolRpc.delete(String(callId));
-    const response = toolResultToRpcResponse(rpcId, payload);
+    // A rendered preview PNG goes to Codex as an image, not only as a path.
+    let enriched = payload;
+    const png = payload?.ok !== false && payload?.result?.supported && typeof payload.result.path === 'string' && payload.result.path.endsWith('.png') ? payload.result.path : '';
+    if (png) {
+      try { enriched = { ...payload, imageDataUrl: `data:image/png;base64,${(await fs.readFile(png)).toString('base64')}` }; } catch {}
+    }
+    const response = toolResultToRpcResponse(rpcId, enriched);
     this.rpc.respond(response.id, response.result);
     return true;
   }

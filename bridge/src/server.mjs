@@ -7,6 +7,7 @@ import { validateClientMessage, bridgeEvent, errorEvent, BRIDGE_VERSION, PROTOCO
 import { createProviderRegistry } from './provider-registry.mjs';
 import { AttachmentStore, MAX_ATTACHMENT_BYTES } from './attachments.mjs';
 import { RETKIT_TOOL_NAMES } from './tools/retkit-tools.mjs';
+import { renderEmailPng } from './screenshot.mjs';
 import { normalizeProviderStatus } from './providers/provider.mjs';
 
 const TOOL_NAMES = new Set(RETKIT_TOOL_NAMES);
@@ -156,7 +157,26 @@ export function createBridgeServer(options = {}) {
     return false;
   }
 
-  function forwardToolToBrowser(session, tool, args = {}) {
+  // Visual check: the browser cannot rasterize the email (cross-origin images
+  // taint a canvas), so the bridge renders the current preview DOM with the
+  // user's own headless Chrome and hands the model a PNG.
+  const renderScreenshot = options.renderScreenshot || renderEmailPng;
+  async function forwardToolToBrowser(session, tool, args = {}) {
+    if (String(tool || '') !== 'get_preview_screenshot') return forwardRawToBrowser(session, tool, args);
+    const dom = await forwardRawToBrowser(session, 'get_preview_dom', { maxChars: 500000 });
+    if (!dom.ok) return dom;
+    const view = args?.view === 'mobile' ? 'mobile' : 'desktop';
+    const shot = await renderScreenshot({
+      html: dom.result?.html || '',
+      view,
+      height: args?.height,
+      outDir: path.join(attachments.rootDir, String(session.sessionId)),
+    });
+    if (!shot?.supported) return { ok: true, result: { supported: false, reason: shot?.reason || 'Screenshot failed' } };
+    return { ok: true, result: { ...shot, note: 'PNG of the current RetKit preview. Open it with your image viewer / Read tool to see the email.' } };
+  }
+
+  function forwardRawToBrowser(session, tool, args = {}) {
     const name = String(tool || '');
     if (!TOOL_NAMES.has(name)) return Promise.resolve({ ok: false, error: { code: 'UNKNOWN_TOOL', message: `Unknown RetKit tool: ${name}` } });
     if (!session.ws) return Promise.resolve({ ok: false, error: { code: 'BROWSER_DISCONNECTED', message: 'RetKit browser disconnected' } });
@@ -192,7 +212,13 @@ export function createBridgeServer(options = {}) {
       })) {
         if (!event) continue;
         if (event.type === 'delta') send(session.ws, bridgeEvent('chat.delta', { provider: providerId, text: String(event.text || '') }));
-        else if (event.type === 'tool.call') {
+        else if (event.type === 'tool.call' && event.tool === 'get_preview_screenshot') {
+          // Rendered by the bridge itself (see forwardToolToBrowser).
+          const callId = String(event.callId || '');
+          forwardToolToBrowser(session, event.tool, event.args || {})
+            .then((payload) => provider.provideToolResult?.(callId, payload))
+            .catch(() => {});
+        } else if (event.type === 'tool.call') {
           session.pendingProviderTools.set(String(event.callId || ''), providerId);
           send(session.ws, bridgeEvent('tool.call', { callId: String(event.callId || ''), tool: event.tool, args: event.args || {} }));
         } else if (event.type === 'error') send(session.ws, bridgeEvent('chat.error', { provider: providerId, code: event.code || 'PROVIDER_ERROR', message: event.message || 'Provider error' }));

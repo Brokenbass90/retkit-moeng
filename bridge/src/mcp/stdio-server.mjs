@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { RETKIT_TOOL_SPECS, RETKIT_TOOL_NAMES } from '../tools/retkit-tools.mjs';
 
@@ -21,7 +22,7 @@ export function createMcpRequestHandler(options = {}) {
       return rpcResult(id, {
         protocolVersion: String(request.params?.protocolVersion || '2025-06-18'),
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'retkit-ai', title: 'RetKit AI Tools', version: '0.7.1' },
+        serverInfo: { name: 'retkit-ai', title: 'RetKit AI Tools', version: '0.7.2' },
       });
     }
     if (request.method === 'tools/list') {
@@ -42,7 +43,15 @@ export function createMcpRequestHandler(options = {}) {
           const error = data.error || { code: `HTTP_${response.status}`, message: data.message || 'RetKit tool failed' };
           return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify({ error }) }], isError: true });
         }
-        return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(data.result ?? null) }], isError: false });
+        const content = [{ type: 'text', text: JSON.stringify(data.result ?? null) }];
+        const pngPath = data.result?.supported && typeof data.result.path === 'string' && data.result.path.endsWith('.png') ? data.result.path : '';
+        if (pngPath) {
+          try {
+            const bytes = await (options.readFile || readFile)(pngPath);
+            content.push({ type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType: 'image/png' });
+          } catch {}
+        }
+        return rpcResult(id, { content, isError: false });
       } catch (error) {
         return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify({ error: { code: 'BRIDGE_UNAVAILABLE', message: error?.message || String(error) } }) }], isError: true });
       }
