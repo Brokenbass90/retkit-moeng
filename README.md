@@ -78,6 +78,14 @@ npm install
 npm start
 ```
 
+**Чтобы не запускать bridge руками (macOS):** один раз выполни в папке RetKit
+
+```bash
+npm run bridge:install
+```
+
+Дальше bridge стартует вместе с Mac и работает в фоне — панель RetKit AI сразу видит Claude / Codex. Проверить: `npm run bridge:status`. Убрать: `npm run bridge:uninstall`. Если переместил папку или обновил Node — повтори `bridge:install`. Лог: `~/Library/Logs/retkit-ai-bridge.log`.
+
 Bridge слушает только `127.0.0.1:43118`. Для скриншотов нужен установленный Google Chrome (или Chromium/Edge/Brave); если он стоит не в стандартном месте — `RETKIT_CHROME=/путь/к/chrome npm start`.
 
 ## Установка

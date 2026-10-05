@@ -11,7 +11,10 @@
     "bridge": "npm --prefix bridge start",
     "bridge:test": "npm --prefix bridge test",
     "version:set": "node scripts/set-version.mjs",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "bridge:install": "npm --prefix bridge run autostart:install",
+    "bridge:uninstall": "npm --prefix bridge run autostart:uninstall",
+    "bridge:status": "npm --prefix bridge run autostart:status"
   },
   "engines": {
     "node": ">=20"

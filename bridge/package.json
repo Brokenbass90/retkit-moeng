@@ -8,6 +8,9 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "autostart:install": "node scripts/autostart.mjs install",
+    "autostart:uninstall": "node scripts/autostart.mjs uninstall",
+    "autostart:status": "node scripts/autostart.mjs status"
   }
 }
