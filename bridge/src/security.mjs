@@ -18,6 +18,12 @@ export function isAllowedOrigin(origin) {
   }
 }
 
+// WebSocket sessions are browser-only: a missing Origin means a non-browser
+// client, which must not be able to open a chat session or drive the page.
+export function isAllowedBrowserOrigin(origin) {
+  return Boolean(origin) && isAllowedOrigin(origin);
+}
+
 export function createSessionSecret() {
   return crypto.randomBytes(32).toString('base64url');
 }

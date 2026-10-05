@@ -18,7 +18,7 @@ const bridge = createBridgeServer({
 const address = await bridge.start();
 const events = [];
 try {
-  const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+  const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { headers: { Origin: 'https://dashboard-02.moengage.com' } });
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('RetKit AI e2e timeout')), 3500);
     ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'hello', protocol: 1, workspaceId: 'e2e' })));

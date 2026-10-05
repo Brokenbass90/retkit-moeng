@@ -2807,6 +2807,9 @@
     shell.dataset.mode = STATE.previewMode;
     const frame = document.createElement('iframe');
     frame.id = IDS.previewFrame;
+    // Same-origin so RetKit can read/patch the preview DOM; no allow-scripts so
+    // email HTML never executes code with MoEngage dashboard privileges.
+    frame.setAttribute('sandbox', 'allow-same-origin');
     shell.appendChild(frame);
     canvas.appendChild(shell);
     previewPane.appendChild(canvas);

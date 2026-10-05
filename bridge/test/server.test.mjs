@@ -10,7 +10,7 @@ test('health and websocket hello expose bridge ready', async () => {
     assert.deepEqual(health, { ok: true, version: '0.6.5', protocol: 1 });
 
     const events = [];
-    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { headers: { Origin: 'https://dashboard-02.moengage.com' } });
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('ws timeout')), 3000);
       ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'hello', protocol: 1, workspaceId: 'test' })));
@@ -37,7 +37,7 @@ test('provider connect and chat stream route through bridge', async () => {
   const address = await bridge.start();
   try {
     const events = [];
-    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { headers: { Origin: 'https://dashboard-02.moengage.com' } });
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('bridge chat timeout')), 3000);
       ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'hello', protocol: 1, workspaceId: 'chat-test' })));
@@ -64,7 +64,7 @@ test('internal MCP tool endpoint forwards to browser and waits for tool.result',
   const address = await bridge.start();
   try {
     let secret = '';
-    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { headers: { Origin: 'https://dashboard-02.moengage.com' } });
     await new Promise((resolve, reject) => {
       ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'hello', protocol: 1, workspaceId: 'tool-test' })));
       ws.addEventListener('message', (event) => {
@@ -85,6 +85,25 @@ test('internal MCP tool endpoint forwards to browser and waits for tool.result',
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true, result: { subject: 'From browser' } });
     ws.close();
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('websocket without a browser Origin is refused', async () => {
+  const bridge = createBridgeServer({ port: 0, host: '127.0.0.1', detectProviders: async () => [] });
+  const address = await bridge.start();
+  try {
+    for (const headers of [{}, { Origin: 'https://evil.example' }]) {
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { headers });
+      const outcome = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve('timeout'), 3000);
+        ws.addEventListener('open', () => { clearTimeout(timer); resolve('open'); });
+        ws.addEventListener('error', () => { clearTimeout(timer); resolve('refused'); });
+      });
+      try { ws.close(); } catch {}
+      assert.equal(outcome, 'refused', `Origin ${headers.Origin || '(none)'} must be refused`);
+    }
   } finally {
     await bridge.stop();
   }

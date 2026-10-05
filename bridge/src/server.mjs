@@ -2,7 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { acceptWebSocket } from './websocket.mjs';
-import { assertLoopbackHost, isAllowedOrigin, createSessionSecret } from './security.mjs';
+import { assertLoopbackHost, isAllowedOrigin, isAllowedBrowserOrigin, createSessionSecret } from './security.mjs';
 import { validateClientMessage, bridgeEvent, errorEvent, BRIDGE_VERSION, PROTOCOL_VERSION } from './protocol.mjs';
 import { createProviderRegistry } from './provider-registry.mjs';
 import { AttachmentStore, MAX_ATTACHMENT_BYTES } from './attachments.mjs';
@@ -324,7 +324,7 @@ export function createBridgeServer(options = {}) {
     server.on('upgrade', (req, socket, head) => {
       try {
         const url = new URL(req.url || '/', 'http://127.0.0.1');
-        if (url.pathname !== '/ws' || !isAllowedOrigin(req.headers.origin)) { socket.destroy(); return; }
+        if (url.pathname !== '/ws' || !isAllowedBrowserOrigin(req.headers.origin)) { socket.destroy(); return; }
         sockets.add(socket);
         const ws = acceptWebSocket(req, socket, head, {
           onMessage: (raw) => handleMessage(ws, raw),
