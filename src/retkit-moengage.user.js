@@ -793,6 +793,101 @@
     return output;
   }
 
+  // ---------------------------------------------------------------------------
+  // Source-whitespace preservation.
+  //
+  // RetKit edits a beautified working copy (see beautifyEmailHtml), but MoEngage
+  // must receive the author's original formatting. Beautify only changes
+  // whitespace between tokens, so the token sequence of the original HTML and of
+  // the working copy is the same except where the user actually edited. We keep
+  // the original whitespace for the unchanged prefix/suffix and take the edited
+  // middle verbatim from the working copy. That keeps email size stable and
+  // never adds whitespace between inline-block columns the user did not touch.
+  // ---------------------------------------------------------------------------
+  function tokenizeHtmlForWhitespace(source) {
+    const text = String(source ?? '');
+    const tokens = [];
+    const gaps = [];
+    const re = /<!--[\s\S]*?-->|<![^>]*>|<[^>]+>|[^<]+/g;
+    let pendingGap = '';
+    let match;
+    while ((match = re.exec(text))) {
+      const piece = match[0];
+      if (piece[0] === '<') {
+        gaps.push(pendingGap);
+        tokens.push(piece);
+        pendingGap = '';
+        continue;
+      }
+      const words = piece.split(/(\s+)/);
+      for (const part of words) {
+        if (!part) continue;
+        if (/^\s+$/.test(part)) { pendingGap += part; continue; }
+        gaps.push(pendingGap);
+        tokens.push(part);
+        pendingGap = '';
+      }
+    }
+    return { tokens, gaps, tail: pendingGap };
+  }
+
+  function isStructuralToken(token) {
+    if (!token || token[0] !== '<') return false;
+    return STRUCTURAL_TAGS.has(parseTagName(token));
+  }
+
+  // A gap is "layout-neutral" when it touches a structural tag: beautify adds or
+  // removes whitespace there, so only its presence between inline content counts.
+  function gapKey(tokens, gaps, index) {
+    const gap = gaps[index] || '';
+    if (isStructuralToken(tokens[index]) || isStructuralToken(tokens[index - 1])) return '';
+    return gap ? ' ' : '';
+  }
+
+  function preserveSourceWhitespace(originalHtml, editedHtml) {
+    const original = String(originalHtml ?? '');
+    const edited = String(editedHtml ?? '');
+    if (!original || !edited || original === edited) return edited;
+    const a = tokenizeHtmlForWhitespace(original);
+    const b = tokenizeHtmlForWhitespace(edited);
+    if (!a.tokens.length || !b.tokens.length) return edited;
+
+    const same = (i, j) => a.tokens[i] === b.tokens[j] && gapKey(a.tokens, a.gaps, i) === gapKey(b.tokens, b.gaps, j);
+    const maxPrefix = Math.min(a.tokens.length, b.tokens.length);
+    let prefix = 0;
+    while (prefix < maxPrefix && same(prefix, prefix)) prefix += 1;
+    let suffix = 0;
+    while (
+      suffix < maxPrefix - prefix
+      && same(a.tokens.length - 1 - suffix, b.tokens.length - 1 - suffix)
+    ) suffix += 1;
+
+    // Nothing in common: a full rewrite. Send the working copy as-is.
+    if (prefix === 0 && suffix === 0) return edited;
+
+    let out = '';
+    for (let i = 0; i < prefix; i += 1) out += a.gaps[i] + a.tokens[i];
+    const bMiddleEnd = b.tokens.length - suffix;
+    const aSuffixStart = a.tokens.length - suffix;
+    // At the two edges of the edit, a layout-neutral gap (next to a structural
+    // tag) keeps the original whitespace; an inline gap follows the edit.
+    const edgeGap = (j, i) => {
+      const neutral = isStructuralToken(b.tokens[j]) || isStructuralToken(b.tokens[j - 1]);
+      return neutral && i <= a.tokens.length ? (a.gaps[i] ?? b.gaps[j]) : b.gaps[j];
+    };
+    for (let j = prefix; j < bMiddleEnd; j += 1) {
+      out += (j === prefix ? edgeGap(j, prefix) : b.gaps[j]) + b.tokens[j];
+    }
+    for (let i = aSuffixStart; i < a.tokens.length; i += 1) {
+      const isFirstSuffix = i === aSuffixStart;
+      const touchedEdit = isFirstSuffix && (bMiddleEnd > prefix || aSuffixStart > prefix);
+      out += (touchedEdit ? edgeGap(bMiddleEnd, i) : a.gaps[i]) + a.tokens[i];
+    }
+    const untouchedEnd = suffix > 0 || (prefix === a.tokens.length && prefix === b.tokens.length);
+    out += untouchedEnd ? a.tail : b.tail;
+    return out;
+  }
+
   function htmlEquivalentForSync(left, right) {
     const a = String(left ?? '');
     const b = String(right ?? '');
@@ -1070,6 +1165,8 @@
     getPreviewDocumentHeight,
     beautifyEmailHtml,
     htmlEquivalentForSync,
+    preserveSourceWhitespace,
+    tokenizeHtmlForWhitespace,
     shouldSkipNativeCommit,
     shouldBlockEmptyNativeCommit,
     findAllLiteral,
@@ -1236,6 +1333,9 @@
 
     // We intentionally use the same path a human edit takes: update CodeMirror,
     // wake its textarea, leave Code View, fire a visual-editor input, then return.
+    // Keep the author's original formatting outside the edited region so
+    // MoEngage never receives a re-indented copy of the whole email.
+    next = preserveSourceWhitespace(native.getValue?.() || '', next);
     native.focus?.();
     writeNativeEditorValue(native, next);
     native.save?.();
