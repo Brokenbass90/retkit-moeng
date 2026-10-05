@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const diagnosticsPath = path.join(root, 'src/diagnostics/incident-recorder.js');
+const functionMapPath = path.join(root, 'src/diagnostics/function-map.js');
 const corePath = path.join(root, 'src/core/retkit-moengage-core.user.js');
 const bridgePath = path.join(root, 'src/moengage/native-bridge.user.js');
 const distPath = path.join(root, 'dist/retkit-moengage.user.js');
@@ -23,6 +24,7 @@ const aiModulePaths = [
 ];
 
 const diagnostics = fs.readFileSync(diagnosticsPath, 'utf8');
+const functionMap = fs.readFileSync(functionMapPath, 'utf8');
 const core = fs.readFileSync(corePath, 'utf8');
 const bridge = fs.readFileSync(bridgePath, 'utf8');
 
@@ -47,7 +49,7 @@ const aiModules = aiModulePaths
   .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
   .map((relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8').trim());
 
-const sections = [diagnostics.trim(), coreParts.body.trim(), ...aiModules, bridgeParts.body.trim()];
+const sections = [diagnostics.trim(), functionMap.trim(), coreParts.body.trim(), ...aiModules, bridgeParts.body.trim()];
 const output = `${header}\n\n${sections.join('\n\n')}\n`;
 fs.mkdirSync(path.dirname(distPath), { recursive: true });
 fs.writeFileSync(distPath, output);

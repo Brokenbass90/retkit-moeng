@@ -182,6 +182,9 @@
         environment: sanitizeMeta(extra.environment || {}),
         incidents: getIncidents(),
         breadcrumbs: getBreadcrumbs().slice(-80),
+        // Вторая колонка отчёта: как устроена страница MoEngage (без значений).
+        ...(root.__RetKitFunctionMap?.export && extra.includeFunctionality !== false
+          ? { functionality: root.__RetKitFunctionMap.export() } : {}),
         ...(extra.includeHtml && typeof extra.html === 'string' ? { html: extra.html } : {}),
       };
     }
@@ -251,6 +254,7 @@
         <div style="color:#8fa2b8;margin-bottom:10px">Only anomalies are stored. Normal editor events are kept briefly as context.</div>
         <div style="margin-bottom:10px"><b>${summary.count}</b> incident(s) retained · auto-clean after 7 days</div>
         <div data-recent style="display:grid;gap:5px;margin-bottom:10px"></div>
+        <div data-fmap style="padding:7px;border:1px solid #263140;border-radius:7px;background:#0c141f;color:#aebdd0;margin-bottom:10px"></div>
         <label style="display:flex;gap:7px;align-items:center;margin-bottom:10px"><input type="checkbox" data-html> Include current HTML in exported report</label>
         <div style="display:flex;gap:7px;flex-wrap:wrap">
           <button class="rk-btn" data-copy>Copy report</button>
@@ -267,6 +271,18 @@
         row.title = `${new Date(Number(item.lastTime || item.time || 0)).toLocaleString()} · ${item.page || ''}`;
         recentHost?.appendChild(row);
       }
+      const fmapHost = pop.querySelector('[data-fmap]');
+      const renderFmap = () => {
+        const m = root.__RetKitFunctionMap?.summary?.();
+        if (!fmapHost) return;
+        if (!m) { fmapHost.remove(); return; }
+        fmapHost.innerHTML = `<b>Functionality map</b> · ${m.endpoints} requests · ${m.controls} controls · ${m.screens} screens`
+          + '<div style="color:#8fa2b8;margin:3px 0 6px">Shapes only: no tokens, emails or email texts. Goes into the downloaded report.</div>'
+          + '<button class="rk-btn" data-fmap-snap>Snapshot screen</button> <button class="rk-btn" data-fmap-clear>Clear map</button>';
+        fmapHost.querySelector('[data-fmap-snap]')?.addEventListener('click', () => { root.__RetKitFunctionMap?.snapshotNow?.(); renderFmap(); });
+        fmapHost.querySelector('[data-fmap-clear]')?.addEventListener('click', () => { root.__RetKitFunctionMap?.clear?.(); renderFmap(); });
+      };
+      renderFmap();
       const makeReport = () => recorder.exportReport({
         retkitVersion: String(options.version || ''),
         environment: environmentSnapshot(),
