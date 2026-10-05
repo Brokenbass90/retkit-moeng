@@ -136,6 +136,7 @@ bridge/                                локальный AI bridge (Node, 127.0
 scripts/                               build, test-runner, set-version, package
 tests/                                 регрессионные тесты + fixtures/
 dist/retkit-moengage.user.js           собранный userscript — единственный файл для Tampermonkey
+shared/click-to-source.js              общий матчер «клик в превью → код» для Retention Future (генерируется)
 ```
 
 `dist/` собирается из `src/` командой `npm run build`; руками его не правим.

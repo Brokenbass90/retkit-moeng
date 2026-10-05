@@ -9,9 +9,9 @@ const core = globalThis.__RetKitMoEngageCore;
 const sandbox = {};
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(new URL('../dist/click-to-source.js', import.meta.url), 'utf8'), sandbox);
+vm.runInContext(fs.readFileSync(new URL('../shared/click-to-source.js', import.meta.url), 'utf8'), sandbox);
 const shared = sandbox.RetKitClickToSource;
-assert.ok(shared?.findRangeFromDescriptor, 'dist/click-to-source.js must expose RetKitClickToSource');
+assert.ok(shared?.findRangeFromDescriptor, 'shared/click-to-source.js must expose RetKitClickToSource');
 
 const html = fs.readFileSync(new URL('./fixtures/email-hybrid.html', import.meta.url), 'utf8')
   + '<table><tr><td><a href="https://example.com/x"><img src="https://cdn.example/btn.png"></a></td>'

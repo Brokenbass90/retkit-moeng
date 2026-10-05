@@ -22,7 +22,7 @@ export function createMcpRequestHandler(options = {}) {
       return rpcResult(id, {
         protocolVersion: String(request.params?.protocolVersion || '2025-06-18'),
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'retkit-ai', title: 'RetKit AI Tools', version: '0.7.2' },
+        serverInfo: { name: 'retkit-ai', title: 'RetKit AI Tools', version: '0.7.3' },
       });
     }
     if (request.method === 'tools/list') {

@@ -1,13 +1,13 @@
 // Exports RetKit's preview-click -> source matcher as a standalone browser
 // module so other RetKit tools (Retention Future Studio) use the exact same,
-// tested logic. Output: dist/click-to-source.js (exposes globalThis.RetKitClickToSource).
+// tested logic. Output: shared/click-to-source.js (exposes globalThis.RetKitClickToSource).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const corePath = path.join(root, 'src/core/retkit-moengage-core.user.js');
-const outPath = path.join(root, 'dist/click-to-source.js');
+const outPath = path.join(root, 'shared/click-to-source.js');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const core = fs.readFileSync(corePath, 'utf8');
 
@@ -38,7 +38,7 @@ function extractConst(name) {
 const body = [extractConst('VOID_TAGS'), ...FUNCTIONS.map(extractFunction)].join('\n\n');
 const output = `/*! RetKit click-to-source v${pkg.version} — generated from retkit-moeng
  *  src/core/retkit-moengage-core.user.js by scripts/export-click-to-source.mjs.
- *  Do not edit by hand: change the core, run \`npm run build\`, copy dist/click-to-source.js. */
+ *  Do not edit by hand: change the core, run \`npm run build\`, copy shared/click-to-source.js. */
 (function (root) {
   'use strict';
 
