@@ -2347,6 +2347,13 @@
         setLocaleLoading(locale, true);
         workspaceStatus(`Switching MoEngage to ${locale}…`, 'neutral');
         try {
+          // Save the open locale first; if MoEngage did not take it, stay here.
+          const flush = await Promise.resolve(root.__RetKitMoEngageCore?.flushBeforeLocaleSwitch?.() || { ok: true });
+          if (flush && flush.ok === false) {
+            workspaceStatus(flush.reason, 'error');
+            diagBreadcrumb('locale.switch.blocked', { from: getActiveLocale(), to: locale });
+            return;
+          }
           const result = await switchNativeLocale(locale);
           if (result.ok) {
             workspaceStatus(`MoEngage locale: ${locale}`, 'ok');

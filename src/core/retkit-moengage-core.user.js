@@ -887,6 +887,7 @@
     previewReadinessAction,
     shouldTreatNativeMismatchAsLateRevert,
     rebindNativeEditorFromMoEngage,
+    flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
   };
@@ -2774,10 +2775,43 @@
   }
 
 
+  // Before leaving a locale, its unsaved edit must reach MoEngage: the next
+  // locale replaces the editor content, and a pending/failed write is lost.
+  // Returns { ok, reason }. ok:false = do not switch, the edit is still here.
+  async function flushBeforeLocaleSwitch(options = {}) {
+    const timeoutMs = Number(options.timeoutMs) || 12000;
+    const started = Date.now();
+    clearTimeout(STATE.syncTimer);
+    STATE.syncTimer = null;
+    while (STATE.applying && Date.now() - started < timeoutMs) await sleep(80);
+    if (STATE.applying) return { ok: false, reason: 'MoEngage is still saving this locale — try again in a moment' };
+    if (!STATE.dirty) return { ok: true, reason: '' };
+    diagBreadcrumb('locale.switch.flush', { revision: STATE.editRevision });
+    status('Saving this locale before switching…', 'neutral');
+    for (let attempt = 1; attempt <= 2 && STATE.dirty; attempt += 1) {
+      let ok = false;
+      try { ok = await pushOverlayToNative(true); } catch {}
+      if (ok && !STATE.dirty) break;
+      if (attempt < 2) await sleep(400);
+    }
+    if (STATE.dirty) {
+      diagIncident('locale_switch_blocked_unsaved', 'Locale switch stopped: the current edit did not reach MoEngage', { revision: STATE.editRevision, html: STATE.overlayEditor?.getValue?.() || '' });
+      return { ok: false, reason: 'This locale was NOT saved in MoEngage — switch stopped so the edit is not lost' };
+    }
+    return { ok: true, reason: '' };
+  }
+
   function rebindNativeEditorFromMoEngage(options = {}) {
     const overlay = STATE.overlayEditor;
     const nextNative = getNativeEditor();
     if (!overlay || !nextNative) return false;
+    // Last line of defence: an edit that never reached MoEngage is kept in
+    // memory for its locale, and restored when the user comes back to it.
+    if (STATE.dirty && STATE.boundLocale) {
+      const html = overlay.getValue();
+      STATE.unsavedByLocale = { ...(STATE.unsavedByLocale || {}), [STATE.boundLocale]: { html, at: Date.now() } };
+      diagIncident('unsaved_edit_stashed', `Unsaved ${STATE.boundLocale} edit kept in RetKit on locale change`, { locale: STATE.boundLocale, html });
+    }
 
     if (STATE.nativeEditor && STATE.nativeChangeHandler) {
       try { STATE.nativeEditor.off?.('change', STATE.nativeChangeHandler); } catch {}
@@ -2804,6 +2838,16 @@
       STATE.renderedBeforeEdit = '';
       STATE.localPreviewUntil = 0;
       STATE.previewHtml = '';
+      STATE.boundLocale = currentBridgeLocale();
+      const stash = STATE.boundLocale ? STATE.unsavedByLocale?.[STATE.boundLocale] : null;
+      if (stash && !htmlEquivalentForSync(stash.html, next)) {
+        overlay.setValue(stash.html);
+        STATE.dirty = true;
+        STATE.editRevision = nextEditRevision(STATE.editRevision);
+        diagBreadcrumb('locale.unsaved.restored', { locale: STATE.boundLocale, length: stash.html.length });
+        setTimeout(() => scheduleNativeSync(300), 0);
+      }
+      if (STATE.unsavedByLocale && STATE.boundLocale) delete STATE.unsavedByLocale[STATE.boundLocale];
       clearSearchMarks();
       clearFoldMarks();
       scheduleFoldRefresh();
@@ -2821,8 +2865,12 @@
     nextNative.refresh?.();
     STATE.overlayEditor?.refresh?.();
     scheduleWorkspaceLayoutRefresh();
-    status('Updated from MoEngage', 'ok');
+    status(STATE.dirty ? `Restored your unsaved ${STATE.boundLocale} edit · saving to MoEngage…` : 'Updated from MoEngage', STATE.dirty ? 'warn' : 'ok');
     return true;
+  }
+
+  function currentBridgeLocale() {
+    try { return String(root.__RetKitMoEngageBridgeApi?.getActiveLocale?.() || '').toUpperCase(); } catch { return ''; }
   }
 
   function makeFoldMarker(collapsed = false) {
@@ -3091,6 +3139,7 @@
     }
 
     STATE.nativeEditor = native;
+    STATE.boundLocale = currentBridgeLocale();
     STATE.previewHtml = '';
     STATE.previewPendingHtml = '';
     STATE.previewLastValidHtml = '';
