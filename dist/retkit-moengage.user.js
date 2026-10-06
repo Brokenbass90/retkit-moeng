@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.0
+// @version      0.8.1
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -750,6 +750,12 @@
 
 (function (root) {
   'use strict';
+
+  // Подпись локали как во вкладке MoEngage (Default, en_US, ar_KW).
+  const localeLabel = (locale) => {
+    try { return root.__RetKitMoEngageBridgeCore?.localeUiLabel?.(locale) || String(locale || ''); }
+    catch { return String(locale || ''); }
+  };
 
   const VOID_TAGS = new Set([
     'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
@@ -2303,7 +2309,7 @@
       checkbox.checked = item.count > 0;
       checkbox.disabled = item.count === 0;
       const locale = document.createElement('strong');
-      locale.textContent = item.count ? `${item.locale} · ${item.count}${Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale) ? ' ✎' : ''}` : item.locale;
+      locale.textContent = item.count ? `${localeLabel(item.locale)} · ${item.count}${Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale) ? ' ✎' : ''}` : localeLabel(item.locale);
       row.title = item.count ? `${item.count} match${item.count === 1 ? '' : 'es'} · click the name to see where` : 'Not found';
       locale.addEventListener('click', (event) => {
         if (!item.count) return;
@@ -2549,9 +2555,9 @@
           remove.type = 'button';
           remove.className = 'rk-ml-remove';
           remove.textContent = '×';
-          remove.title = `Remove ${locale}`;
+          remove.title = `Remove ${localeLabel(locale)}`;
           remove.addEventListener('click', async () => {
-            if (STATE.multiLocaleBusy || root.confirm?.(`Remove locale ${locale} from this MoEngage campaign?`) === false) return;
+            if (STATE.multiLocaleBusy || root.confirm?.(`Remove locale ${localeLabel(locale)} from this MoEngage campaign?`) === false) return;
             setMultiLocaleBusy(true);
             try {
               const result = await Promise.resolve(bridge.removeLocale?.(locale));
@@ -2677,7 +2683,7 @@
     own.className = 'rk-ml-own';
     const ownLabel = document.createElement('span');
     ownLabel.className = 'rk-ml-kind';
-    ownLabel.textContent = `${locale}: replace with`;
+    ownLabel.textContent = `${localeLabel(locale)}: replace with`;
     const ownInput = document.createElement('input');
     ownInput.className = 'rk-find-input';
     ownInput.dataset.rkLocaleOverride = locale;
@@ -2688,7 +2694,7 @@
       if (ownInput.value === '') delete STATE.multiLocaleOverrides[locale];
       else STATE.multiLocaleOverrides[locale] = ownInput.value;
       const chip = document.querySelector(`#${IDS.multiLocaleRows} [data-locale="${locale}"] strong`);
-      if (chip) chip.textContent = `${locale} · ${item.count}${ownInput.value !== '' ? ' ✎' : ''}`;
+      if (chip) chip.textContent = `${localeLabel(locale)} · ${item.count}${ownInput.value !== '' ? ' ✎' : ''}`;
     });
     own.append(ownLabel, ownInput);
     host.appendChild(own);
@@ -2698,7 +2704,7 @@
       line.className = 'rk-ml-hit';
       const kind = document.createElement('span');
       kind.className = 'rk-ml-kind';
-      kind.textContent = `${locale} · ${KIND[hit.kind] || 'text'}`;
+      kind.textContent = `${localeLabel(locale)} · ${KIND[hit.kind] || 'text'}`;
       const code = document.createElement('code');
       const mark = document.createElement('mark');
       mark.textContent = hit.match;
@@ -2877,7 +2883,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2902,7 +2908,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.0',
+        version: '0.8.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3932,7 +3938,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.1 loaded');
   }
 
   boot();
@@ -4464,7 +4470,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.0',
+          clientVersion: '0.8.1',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -5793,14 +5799,42 @@
 
   const ARABIC_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
   const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+  // Языки, которые RetKit знает. Локаль — это язык и, с недавних пор у
+  // MoEngage, регион: вкладки «Default, en_US, es_ES, ar_KW…». Раньше всё
+  // сводилось к двум буквам, и en_US сливалась с Default в одну «EN».
   const KNOWN_LOCALES = new Set(['DEFAULT', 'EN', 'AR', 'ES', 'FR', 'ID', 'PT', 'TH', 'VI', 'DE', 'HI', 'TL', 'UR', 'BN', 'SV', 'JA']);
 
+  /** Точный ключ локали: DEFAULT, EN, AR_KW, PT_PT. */
   function normaliseLocale(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
     if (/^default$/i.test(raw)) return 'DEFAULT';
-    const code = raw.replace('_', '-').split('-')[0].toUpperCase();
-    return /^[A-Z]{2,3}$/.test(code) ? code : raw.toUpperCase();
+    const match = raw.match(/^([a-z]{2,3})(?:[-_]([a-z]{2,4}))?$/i);
+    if (match) return match[2] ? `${match[1].toUpperCase()}_${match[2].toUpperCase()}` : match[1].toUpperCase();
+    return raw.toUpperCase();
+  }
+
+  /** Язык локали: AR_KW → AR, DEFAULT → EN. */
+  function localeLanguage(value) {
+    const locale = normaliseLocale(value);
+    if (!locale) return '';
+    if (locale === 'DEFAULT') return 'EN';
+    return locale.split('_')[0];
+  }
+
+  function isKnownLocale(value) {
+    const locale = normaliseLocale(value);
+    return Boolean(locale) && (locale === 'DEFAULT' || KNOWN_LOCALES.has(locale.split('_')[0]));
+  }
+
+  /** Как вкладка подписана в MoEngage: ar_KW, Default, AR. */
+  function nativeLocaleLabels(value) {
+    const locale = normaliseLocale(value);
+    if (!locale) return [];
+    if (locale === 'DEFAULT' || locale === 'EN') return ['Default', 'EN', 'en'];
+    const [lang, region] = locale.split('_');
+    if (!region) return [lang, lang.toLowerCase()];
+    return [`${lang.toLowerCase()}_${region}`, locale, `${lang.toLowerCase()}-${region}`, `${lang.toLowerCase()}_${region.toLowerCase()}`];
   }
 
   function localeFromHtml(html) {
@@ -5809,7 +5843,7 @@
   }
 
   function isArabicLocale(locale) {
-    return normaliseLocale(locale) === 'AR';
+    return localeLanguage(locale) === 'AR';
   }
 
   function displayLocale(value) {
@@ -5829,7 +5863,7 @@
     const result = [];
     for (const value of values || []) {
       const locale = normaliseLocale(value);
-      if (!KNOWN_LOCALES.has(locale)) continue;
+      if (!isKnownLocale(locale)) continue;
       const shown = displayLocale(locale);
       if (!shown || seen.has(shown)) continue;
       seen.add(shown);
@@ -5840,16 +5874,43 @@
 
   function sortLocalesForUi(values) {
     const locales = filterKnownLocales(values);
-    const rest = locales.filter((locale) => locale !== 'EN').sort((a, b) => a.localeCompare(b, 'en'));
+    // Default (EN) первой, за ней английские с регионом, дальше по алфавиту.
+    const rest = locales.filter((locale) => locale !== 'EN')
+      .sort((a, b) => (localeLanguage(a) === 'EN' ? 0 : 1) - (localeLanguage(b) === 'EN' ? 0 : 1) || a.localeCompare(b, 'en'));
     return locales.includes('EN') ? ['EN', ...rest] : rest;
   }
 
+  /** Подпись в RetKit как во вкладке MoEngage: Default, en_US, ar_KW, AR. */
+  function localeUiLabel(value) {
+    const locale = displayLocale(value);
+    if (!locale) return '';
+    if (locale === 'EN') return 'Default';
+    const [lang, region] = locale.split('_');
+    return region ? `${lang.toLowerCase()}_${region}` : lang;
+  }
+
   function resolveActiveLocale(renderedHtml, editorHtml, nativeLocale) {
-    const rendered = displayLocale(localeFromHtml(renderedHtml));
-    if (rendered) return rendered;
-    const editor = displayLocale(localeFromHtml(editorHtml));
-    if (editor) return editor;
-    return displayLocale(nativeLocale);
+    const htmlLocale = localeFromHtml(renderedHtml) || localeFromHtml(editorHtml);
+    const native = nativeLocale ? displayLocale(nativeLocale) : '';
+    if (!htmlLocale) return native;
+    if (!native) return displayLocale(htmlLocale);
+    // Тот же язык — берём точную вкладку (lang="ar" во вкладке ar_KW).
+    if (localeLanguage(htmlLocale) === localeLanguage(native)) return native;
+    // Шаблон часто оставляет lang="en" во всех локалях: так вкладка ar_KW
+    // показывалась в RetKit как EN. Английский lang вкладку не перебивает.
+    if (localeLanguage(htmlLocale) === 'EN') return native;
+    // Иной язык в HTML — вкладка MoEngage отстала после перерисовки.
+    return displayLocale(htmlLocale);
+  }
+
+  /** Двухбуквенный язык → точная вкладка, если вкладка этого языка одна. */
+  function matchLocaleToTabs(locale, tabLocales) {
+    const key = displayLocale(locale);
+    if (!key || key.includes('_')) return key;
+    const tabs = (tabLocales || []).map(displayLocale);
+    if (tabs.includes(key)) return key;
+    const same = tabs.filter((tab) => tab !== 'EN' && localeLanguage(tab) === key);
+    return same.length === 1 ? same[0] : key;
   }
 
   function stripHtmlText(value) {
@@ -6052,7 +6113,7 @@
     const seen = new Set();
     for (const item of Array.isArray(input.locales) ? input.locales : []) {
       const locale = displayLocale(item);
-      if (!locale || !KNOWN_LOCALES.has(normaliseLocale(item)) || seen.has(locale)) continue;
+      if (!locale || !isKnownLocale(item) || seen.has(locale)) continue;
       seen.add(locale);
       locales.push(locale);
     }
@@ -6229,7 +6290,7 @@
     if (!raw) return '';
     if (/^(?:add|new|all)$/i.test(raw)) return '';
     if (/^default$/i.test(raw)) return 'EN';
-    if (!/^[a-z]{2,3}(?:[-_][a-z]{2})?$/i.test(raw)) return '';
+    if (!/^[a-z]{2,3}(?:[-_][a-z]{2,4})?$/i.test(raw)) return '';
     return displayLocale(normaliseLocale(raw));
   }
 
@@ -6295,7 +6356,13 @@
     const labels = [];
     const missing = [];
     for (const locale of requested) {
-      const label = labelByLocale.get(locale);
+      let label = labelByLocale.get(locale);
+      // Сохранённый выбор из старых двухбуквенных времён («AR»), а в окне
+      // теста теперь «ar_KW»: берём единственную локаль этого языка.
+      if (!label && !locale.includes('_')) {
+        const sameLanguage = [...labelByLocale.keys()].filter((key) => key !== 'EN' && localeLanguage(key) === locale);
+        if (sameLanguage.length === 1) label = labelByLocale.get(sameLanguage[0]);
+      }
       if (!label) missing.push(locale);
       else labels.push(label);
     }
@@ -6307,6 +6374,10 @@
 
   const core = {
     normaliseLocale,
+    localeLanguage,
+    isKnownLocale,
+    localeUiLabel,
+    nativeLocaleLabels,
     localeFromHtml,
     isArabicLocale,
     displayLocale,
@@ -6314,6 +6385,7 @@
     filterKnownLocales,
     sortLocalesForUi,
     resolveActiveLocale,
+    matchLocaleToTabs,
     transformRtlHtml,
     normaliseTestPreferences,
     shouldAllowRtlFix,
@@ -6613,7 +6685,7 @@
   function exactLocaleFromText(value) {
     const raw = String(value || '').trim();
     if (/^default$/i.test(raw)) return 'DEFAULT';
-    if (/^[a-z]{2}(?:[-_][a-z]{2})?$/i.test(raw)) return normaliseLocale(raw);
+    if (/^[a-z]{2,3}(?:[-_][a-z]{2,4})?$/i.test(raw)) return normaliseLocale(raw);
     return '';
   }
 
@@ -6714,11 +6786,13 @@
     const editorHtml = getOverlayEditor()?.getValue?.() || '';
     // MoEngage can leave selected-tab metadata stale while React remounts a
     // locale editor. The actual rendered/source HTML is the authoritative state.
-    if (localeFromHtml(renderedHtml) || localeFromHtml(editorHtml)) {
-      return resolveActiveLocale(renderedHtml, editorHtml, '');
-    }
+    // The HTML lang is only a hint now: templates often keep lang="en" in every
+    // locale, so the native tab wins unless the HTML names another language.
     const native = typeof getNativeSelectedLocale === 'function' ? getNativeSelectedLocale() : '';
-    return resolveActiveLocale('', '', native);
+    const resolved = resolveActiveLocale(renderedHtml, editorHtml, native);
+    let tabs = [];
+    try { tabs = discoverNativeLocaleTabs().map((item) => item.locale); } catch {}
+    return matchLocaleToTabs(resolved, tabs);
   }
 
   function pruneLegacyToolbarButtons() {
@@ -6729,7 +6803,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.0');
+    setTextContentIfChanged(version, 'v0.8.1');
     return true;
   }
 
@@ -6819,7 +6893,7 @@
     const textLocale = exactLocaleFromText(textOf(element));
     const valueLocale = exactLocaleFromText(element.getAttribute?.('value'));
     const locale = textLocale || valueLocale;
-    return KNOWN_LOCALES.has(locale) ? locale : '';
+    return isKnownLocale(locale) ? locale : '';
   }
 
   function isRetKitElement(element) {
@@ -6894,7 +6968,7 @@
             const text = directElementText(node);
             if (text && text.length <= 18) {
               const locale = displayLocale(localeCodeFromLabel(text));
-              if (locale && KNOWN_LOCALES.has(normaliseLocale(locale))) {
+              if (locale && isKnownLocale(locale)) {
                 candidates.push({ locale, element: node });
                 seenElements.add(node);
               }
@@ -8013,7 +8087,7 @@
       const tab = document.createElement('button');
       tab.type = 'button';
       tab.className = `rk-v052-locale-tab${locale === active ? ' rk-active' : ''}`;
-      tab.textContent = locale;
+      tab.textContent = localeUiLabel(locale);
       tab.title = `Switch MoEngage to ${locale}`;
       tab.addEventListener('click', async () => {
         if (locale === getActiveLocale()) return;
@@ -8298,8 +8372,7 @@
   }
 
   function testLocalePortalLabels(locale) {
-    const shown = displayLocale(locale);
-    return shown === 'EN' ? ['Default', 'EN'] : [shown];
+    return nativeLocaleLabels(locale);
   }
 
   function dropdownClickable(control) {
@@ -8360,7 +8433,7 @@
       const labelNode = row.querySelector?.('.mds-dropdown__popup__list__item__label') || row;
       const label = textOf(labelNode);
       const locale = testLocaleLabelToDisplay(label);
-      if (!locale || !KNOWN_LOCALES.has(normaliseLocale(locale))) continue;
+      if (!locale || !isKnownLocale(locale)) continue;
       seen.add(row);
       options.push({ locale, label, option: row });
     }
@@ -8379,7 +8452,7 @@
       const text = textOf(el);
       if (!text || text.length > 24) continue;
       const locale = testLocaleLabelToDisplay(text);
-      if (!locale || !KNOWN_LOCALES.has(normaliseLocale(locale))) continue;
+      if (!locale || !isKnownLocale(locale)) continue;
       if (seen.has(text)) continue;
       const sameChild = [...el.children].some((child) => textOf(child) === text);
       if (sameChild) continue;
@@ -8435,7 +8508,7 @@
       for (const option of document.querySelectorAll('.mds-dropdown__popup__list__item,[role="option"],label,li')) {
         if (!isVisible(option) || isRetKitElement(option)) continue;
         const locale = testLocaleLabelToDisplay(textOf(option));
-        if (!locale || !KNOWN_LOCALES.has(normaliseLocale(locale))) continue;
+        if (!locale || !isKnownLocale(locale)) continue;
         let cursor = option;
         for (let depth = 0; cursor && depth < 7 && cursor !== document.body; depth += 1, cursor = cursor.parentElement) {
           consider(cursor);
@@ -8684,7 +8757,7 @@
         const label = textOf(labelNode).replace(/\s+/g, ' ').trim();
         return { row, label, locale: testLocaleLabelToDisplay(label) };
       })
-      .filter((item, index, all) => item.locale && KNOWN_LOCALES.has(normaliseLocale(item.locale)) && all.findIndex((x) => x.row === item.row) === index);
+      .filter((item, index, all) => item.locale && isKnownLocale(item.locale) && all.findIndex((x) => x.row === item.row) === index);
 
     let rows = readRows(opened.popup);
     const available = [...new Set(rows.map((item) => item.locale))];
@@ -8960,7 +9033,7 @@
       checkbox.dataset.testLocale = locale;
       checkbox.checked = selected.has(locale);
       const text = document.createElement('span');
-      text.textContent = locale;
+      text.textContent = localeUiLabel(locale);
       label.append(checkbox, text);
       container.appendChild(label);
     }
@@ -9090,7 +9163,7 @@
     for (const locale of locales) {
       const label = document.createElement('label');
       label.className = 'rk-v060-locale-choice';
-      label.innerHTML = `<input type="checkbox" data-locale="${locale}"> <span>${locale}</span>`;
+      label.innerHTML = `<input type="checkbox" data-locale="${locale}"> <span>${localeUiLabel(locale)}</span>`;
       list.appendChild(label);
     }
     addButton.disabled = false;
@@ -9522,7 +9595,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.0' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.1' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -9548,7 +9621,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.0 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.1 loaded');
   }
 
   bootBridge();

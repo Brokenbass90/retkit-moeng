@@ -19,10 +19,12 @@ vm.runInContext(source, sandbox, { filename: 'native-bridge.user.js' });
 const core = sandbox.globalThis.__RetKitMoEngageBridgeCore;
 assert.ok(core, 'bridge core should be exposed');
 
-assert.equal(core.normaliseLocale(' ar-SA '), 'AR');
-assert.equal(core.normaliseLocale('pt_BR'), 'PT');
+assert.equal(core.normaliseLocale(' ar-SA '), 'AR_SA');
+assert.equal(core.localeLanguage(' ar-SA '), 'AR');
+assert.equal(core.normaliseLocale('pt_BR'), 'PT_BR');
+assert.equal(core.localeLanguage('pt_BR'), 'PT');
 assert.equal(core.localeFromHtml('<html lang="ar"><body>x</body></html>'), 'AR');
-assert.equal(core.localeFromHtml("<html lang='es-ES'>"), 'ES');
+assert.equal(core.localeFromHtml("<html lang='es-ES'>"), 'ES_ES');
 assert.equal(core.localeFromHtml('<html><body>x</body></html>'), '');
 assert.equal(core.isArabicLocale('AR'), true);
 assert.equal(core.isArabicLocale('ar-SA'), true);

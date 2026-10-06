@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.0
+// @version      0.8.1
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -12,6 +12,12 @@
 
 (function (root) {
   'use strict';
+
+  // Подпись локали как во вкладке MoEngage (Default, en_US, ar_KW).
+  const localeLabel = (locale) => {
+    try { return root.__RetKitMoEngageBridgeCore?.localeUiLabel?.(locale) || String(locale || ''); }
+    catch { return String(locale || ''); }
+  };
 
   const VOID_TAGS = new Set([
     'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
@@ -1565,7 +1571,7 @@
       checkbox.checked = item.count > 0;
       checkbox.disabled = item.count === 0;
       const locale = document.createElement('strong');
-      locale.textContent = item.count ? `${item.locale} · ${item.count}${Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale) ? ' ✎' : ''}` : item.locale;
+      locale.textContent = item.count ? `${localeLabel(item.locale)} · ${item.count}${Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale) ? ' ✎' : ''}` : localeLabel(item.locale);
       row.title = item.count ? `${item.count} match${item.count === 1 ? '' : 'es'} · click the name to see where` : 'Not found';
       locale.addEventListener('click', (event) => {
         if (!item.count) return;
@@ -1811,9 +1817,9 @@
           remove.type = 'button';
           remove.className = 'rk-ml-remove';
           remove.textContent = '×';
-          remove.title = `Remove ${locale}`;
+          remove.title = `Remove ${localeLabel(locale)}`;
           remove.addEventListener('click', async () => {
-            if (STATE.multiLocaleBusy || root.confirm?.(`Remove locale ${locale} from this MoEngage campaign?`) === false) return;
+            if (STATE.multiLocaleBusy || root.confirm?.(`Remove locale ${localeLabel(locale)} from this MoEngage campaign?`) === false) return;
             setMultiLocaleBusy(true);
             try {
               const result = await Promise.resolve(bridge.removeLocale?.(locale));
@@ -1939,7 +1945,7 @@
     own.className = 'rk-ml-own';
     const ownLabel = document.createElement('span');
     ownLabel.className = 'rk-ml-kind';
-    ownLabel.textContent = `${locale}: replace with`;
+    ownLabel.textContent = `${localeLabel(locale)}: replace with`;
     const ownInput = document.createElement('input');
     ownInput.className = 'rk-find-input';
     ownInput.dataset.rkLocaleOverride = locale;
@@ -1950,7 +1956,7 @@
       if (ownInput.value === '') delete STATE.multiLocaleOverrides[locale];
       else STATE.multiLocaleOverrides[locale] = ownInput.value;
       const chip = document.querySelector(`#${IDS.multiLocaleRows} [data-locale="${locale}"] strong`);
-      if (chip) chip.textContent = `${locale} · ${item.count}${ownInput.value !== '' ? ' ✎' : ''}`;
+      if (chip) chip.textContent = `${localeLabel(locale)} · ${item.count}${ownInput.value !== '' ? ' ✎' : ''}`;
     });
     own.append(ownLabel, ownInput);
     host.appendChild(own);
@@ -1960,7 +1966,7 @@
       line.className = 'rk-ml-hit';
       const kind = document.createElement('span');
       kind.className = 'rk-ml-kind';
-      kind.textContent = `${locale} · ${KIND[hit.kind] || 'text'}`;
+      kind.textContent = `${localeLabel(locale)} · ${KIND[hit.kind] || 'text'}`;
       const code = document.createElement('code');
       const mark = document.createElement('mark');
       mark.textContent = hit.match;
@@ -2139,7 +2145,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2164,7 +2170,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.0',
+        version: '0.8.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3194,7 +3200,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.1 loaded');
   }
 
   boot();

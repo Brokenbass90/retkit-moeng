@@ -101,7 +101,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.0',
+          clientVersion: '0.8.1',
         });
         socket.send(JSON.stringify(hello));
       });
