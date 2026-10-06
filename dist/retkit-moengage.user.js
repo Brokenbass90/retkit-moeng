@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.1
+// @version      0.8.2
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1554,8 +1554,14 @@
     return (Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0) + 1;
   }
 
-  function idleSyncDelay() {
-    return 1400;
+  // Сколько длилась последняя запись в MoEngage. На больших письмах (80+ КБ)
+  // одна запись через Froala занимает 2–3 с и подвешивает страницу; если
+  // писать после каждой паузы в 1,4 с, человек печатает сквозь подвисания.
+  let lastNativeSyncMs = 0;
+  function idleSyncDelay(lastSyncMs = lastNativeSyncMs) {
+    const last = Number(lastSyncMs) || 0;
+    if (last <= 1000) return 1400;
+    return Math.min(4000, Math.round(1400 + last * 0.8));
   }
 
   function shouldApplyNativeResult(state = {}) {
@@ -2231,6 +2237,10 @@
   function setMultiLocaleBusy(value, message = '') {
     STATE.multiLocaleBusy = Boolean(value);
     setMultiLocaleLoading(STATE.multiLocaleBusy ? (message || 'Working across locales…') : '');
+    if (!STATE.multiLocaleBusy && (STATE.syncAfterMultiLocale || STATE.dirty)) {
+      STATE.syncAfterMultiLocale = false;
+      if (STATE.dirty && !STATE.composing) scheduleNativeSync(300);
+    }
     const drawer = document.getElementById(IDS.multiLocaleDrawer);
     if (!drawer) return;
     for (const control of drawer.querySelectorAll('button,input')) control.disabled = STATE.multiLocaleBusy;
@@ -2450,6 +2460,13 @@
       }
       renderMultiLocaleDrawer(true);
       if (STATE.multiLocaleBusy) { STATE.multiLocaleRescanPending = true; return; }
+      // Не ходим по локалям, пока текущая правка не записана в MoEngage:
+      // переключение вкладок посреди записи и было причиной откатов.
+      if (STATE.applying || STATE.syncTimer || STATE.dirty) {
+        STATE.multiLocaleScanWaits = (STATE.multiLocaleScanWaits || 0) + 1;
+        if (STATE.multiLocaleScanWaits <= 20) { scheduleMultiLocaleAutoScan(700); return; }
+      }
+      STATE.multiLocaleScanWaits = 0;
       void scanMultiLocaleReplace().catch((error) => {
         const message = error?.message || String(error);
         STATE.multiLocaleScanError = message;
@@ -2883,7 +2900,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.1</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.2</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2908,7 +2925,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.1',
+        version: '0.8.2',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3269,6 +3286,14 @@
 
   async function pushOverlayToNative(force = false) {
     if ((!force && (STATE.syncPaused || STATE.composing)) || STATE.syncingFromNative) return false;
+    // Пока RetKit ходит по локалям (поиск/замена во всех), MoEngage переключает
+    // вкладки, и запись текущей правки в это время MoEngage откатывает
+    // (moengage_sync_rejected в логах). Пишем сразу после.
+    if (!force && STATE.multiLocaleBusy) {
+      STATE.syncAfterMultiLocale = true;
+      diagBreadcrumb('sync.deferred', { revision: STATE.editRevision, reason: 'multilocale-busy' });
+      return false;
+    }
     const overlay = STATE.overlayEditor;
     const native = STATE.nativeEditor;
     if (!overlay || !native) return false;
@@ -3340,6 +3365,7 @@
       STATE.lastAppliedRevision = startedRevision;
       STATE.lastAppliedAt = Date.now();
       const durationMs = STATE.lastAppliedAt - startedAt;
+      lastNativeSyncMs = durationMs;
       diagBreadcrumb('sync.done', { revision: startedRevision, durationMs });
       const pendingRtl = root.__RetKitPendingRtlVerification;
       if (pendingRtl && htmlEquivalentForSync(pendingRtl.html, next)) {
@@ -3582,8 +3608,13 @@
       scheduleFoldRefresh();
       scheduleValidation();
 
-      const findValue = document.getElementById(IDS.findInput)?.value || '';
-      if (findValue) updateSearchHighlights(findValue, -1);
+      // Подсветку поиска пересчитываем после паузы, а не на каждую букву:
+      // на 80-КБ письме это заметная задержка при наборе.
+      clearTimeout(STATE.searchHighlightTimer);
+      STATE.searchHighlightTimer = setTimeout(() => {
+        const findValue = document.getElementById(IDS.findInput)?.value || '';
+        if (findValue) updateSearchHighlights(findValue, -1);
+      }, 250);
 
       STATE.renderedBeforeEdit = getRenderedPreviewHtml();
       STATE.awaitingRenderedUpdate = true;
@@ -3938,7 +3969,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.1 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.2 loaded');
   }
 
   boot();
@@ -4470,7 +4501,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.1',
+          clientVersion: '0.8.2',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -6803,7 +6834,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.1');
+    setTextContentIfChanged(version, 'v0.8.2');
     return true;
   }
 
@@ -9595,7 +9626,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.1' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.2' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -9621,7 +9652,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.1 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.2 loaded');
   }
 
   bootBridge();
