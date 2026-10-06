@@ -42,7 +42,7 @@ assert.match(bridgeSource, /setLocaleHtml:/, 'browser bridge API should expose s
 assert.match(bridgeSource, /async function setNativeLocaleHtml\(/, 'bridge should have verified locale HTML writer');
 assert.match(coreSource, /retkit-mo-multilocale-drawer/, 'advanced multi-locale drawer should exist');
 assert.doesNotMatch(coreSource, /makeButton\('Scope/, 'find bar should not expose a separate Scope control');
-assert.match(coreSource, /scheduleMultiLocaleAutoScan/, 'find bar should auto-scan locales');
+assert.match(coreSource, /Search all locales/, 'find bar offers an explicit all-locales search');
 assert.doesNotMatch(coreSource, /bar\.append\([^\n]*Bulk Images/, 'topbar must not gain a permanent Bulk Images button');
 assert.match(bridgeSource, /nativeLocaleBarCache/, 'native locale bar should be cached while connected');
 assert.match(bridgeSource, /addLocaleMenuRootFromNode/, 'add-locale options should be scoped to the newly mounted native popup');

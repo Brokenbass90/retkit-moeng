@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.4
+// @version      0.8.5
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1826,9 +1826,43 @@
     const keptOnce = htmlEquivalentForSync((getNativeEditor() || native).getValue?.(), next);
     if (fast) return { ok: Boolean(keptOnce), tentative: true, reason: keptOnce ? '' : 'MoEngage did not keep the native HTML' };
     await sleep(500);
-    const keptTwice = htmlEquivalentForSync((getNativeEditor() || native).getValue?.(), next);
+    const nativeAfter = (getNativeEditor() || native).getValue?.() || '';
+    const keptTwice = htmlEquivalentForSync(nativeAfter, next);
     const ok = Boolean(keptOnce && keptTwice);
-    return { ok, reason: ok ? '' : 'MoEngage reverted the HTML after Froala accepted it' };
+    if (ok) return { ok, reason: '' };
+    // What did MoEngage actually keep? "reverted" = back to the old HTML,
+    // "changed" = it kept something else (its own rewrite or another locale).
+    const outcome = htmlEquivalentForSync(nativeAfter, nativeBefore) ? 'reverted' : 'changed';
+    return {
+      ok,
+      outcome,
+      diff: describeHtmlDifference(next, nativeAfter),
+      nativeLength: nativeAfter.length,
+      reason: outcome === 'reverted'
+        ? 'MoEngage reverted the HTML after Froala accepted it'
+        : 'MoEngage kept a different HTML than RetKit wrote',
+    };
+  }
+
+  // First place where two HTML strings differ, with a short context on each
+  // side — enough to see what MoEngage rewrote, without logging the email.
+  function describeHtmlDifference(expected, actual, radius = 60) {
+    const a = String(expected ?? '');
+    const b = String(actual ?? '');
+    let start = 0;
+    const max = Math.min(a.length, b.length);
+    while (start < max && a.charCodeAt(start) === b.charCodeAt(start)) start += 1;
+    let endA = a.length;
+    let endB = b.length;
+    while (endA > start && endB > start && a.charCodeAt(endA - 1) === b.charCodeAt(endB - 1)) { endA -= 1; endB -= 1; }
+    const clip = (text) => text.length > radius * 2 ? `${text.slice(0, radius)}…${text.slice(-radius)}` : text;
+    return {
+      at: start,
+      lengthDelta: b.length - a.length,
+      context: a.slice(Math.max(0, start - radius), start),
+      expected: clip(a.slice(start, endA)),
+      actual: clip(b.slice(start, endB)),
+    };
   }
 
   function getSourcePreviewFrame() {
@@ -2100,8 +2134,8 @@
     find.focus();
     find.select();
     updateSearchHighlights(find.value, -1);
+    resetMultiLocalePlanForQuery();
     renderMultiLocaleDrawer(true);
-    scheduleMultiLocaleAutoScan(40);
   }
 
   function replaceCurrent() {
@@ -2133,7 +2167,8 @@
     editor.setCursor(cursor);
     updateSearchHighlights(query, -1);
     status(`Replaced ${result.count} occurrence${result.count === 1 ? '' : 's'}`, 'ok');
-    scheduleMultiLocaleAutoScan(120);
+    resetMultiLocalePlanForQuery();
+    renderMultiLocalePlanRows();
   }
 
   function captureEditorViewState() {
@@ -2290,7 +2325,15 @@
         });
         empty.append(message, retry);
       } else {
-        empty.textContent = 'RetKit scans locales automatically.';
+        empty.textContent = 'Typing searches only this locale. ';
+        const searchAll = document.createElement('button');
+        searchAll.type = 'button';
+        searchAll.className = 'rk-find-mini';
+        searchAll.dataset.rkMultilocaleSearch = '1';
+        searchAll.textContent = 'Search all locales';
+        searchAll.title = 'Opens every locale tab once to count matches. Runs only when you press it.';
+        searchAll.addEventListener('click', () => requestMultiLocaleScan());
+        empty.append(searchAll);
       }
       host.appendChild(empty);
       if (apply) { apply.disabled = true; apply.textContent = 'Replace across locales'; }
@@ -2417,10 +2460,11 @@
         htmlByLocale[locale] = String(await Promise.resolve(bridge.readLocaleHtmlFast(locale)) || '');
       }
       if (String(document.getElementById(IDS.findInput)?.value || '') !== query) {
-        STATE.multiLocaleRescanPending = true;
+        // The query changed mid-walk: this result is stale, wait for the button.
         return;
       }
       STATE.multiLocalePlan = smartPlan(htmlByLocale, query, locales, multiLocaleMode());
+      STATE.multiLocalePlanKey = `${multiLocaleMode()}|${query}`;
       if (STATE.multiLocaleOverridesQuery !== query) {
         STATE.multiLocaleOverrides = {};
         STATE.multiLocaleOverridesQuery = query;
@@ -2448,6 +2492,26 @@
     }
   }
 
+  // The across-locales result belongs to one query + mode. Any change makes it
+  // stale: drop it and wait for an explicit "Search all locales".
+  function resetMultiLocalePlanForQuery(force = false) {
+    const query = String(document.getElementById(IDS.findInput)?.value || '');
+    const key = `${multiLocaleMode()}|${query}`;
+    if (!force && STATE.multiLocalePlanKey === key) return;
+    STATE.multiLocalePlanKey = '';
+    clearTimeout(STATE.multiLocaleAutoScanTimer);
+    STATE.multiLocaleAutoScanTimer = null;
+    if (STATE.multiLocaleBusy) STATE.multiLocaleRescanPending = false;
+    STATE.multiLocalePlan = [];
+    STATE.multiLocaleScanError = '';
+  }
+
+  function requestMultiLocaleScan() {
+    STATE.multiLocaleScanError = '';
+    scheduleMultiLocaleAutoScan(0);
+  }
+
+  // Runs only on request (button, Retry, model tool) — never while typing.
   function scheduleMultiLocaleAutoScan(delayMs = 260) {
     clearTimeout(STATE.multiLocaleAutoScanTimer);
     STATE.multiLocaleAutoScanTimer = setTimeout(() => {
@@ -2534,7 +2598,6 @@
         const totalMatches = applied.reduce((sum, item) => sum + item.count, 0);
       status(`Replaced ${totalMatches} matches in ${applied.length} locales · ↶ Original keeps each locale's first version`, applied.length ? 'ok' : 'warn');
       diagBreadcrumb('multilocale.apply.done', { localeCount: applied.length, totalMatches, mode: 'native-hidden-stable' });
-      scheduleMultiLocaleAutoScan(120);
     } catch (error) {
           diagIncident('multilocale_apply_failed', error?.message || String(error), { appliedLocales: applied.map((item) => item.locale), mode: 'native-hidden-stable' });
       status(`Bulk replace stopped: ${error?.message || error}`, 'error');
@@ -2653,7 +2716,7 @@
       const modeToggle = document.createElement('input');
       modeToggle.type = 'checkbox';
       modeToggle.id = IDS.multiLocaleModeToggle;
-      modeToggle.addEventListener('change', () => scheduleMultiLocaleAutoScan(0));
+      modeToggle.addEventListener('change', () => { resetMultiLocalePlanForQuery(true); renderMultiLocalePlanRows(); });
       modeLabel.append(modeToggle, document.createTextNode(' Same image by file name'));
       const note = document.createElement('span');
       note.className = 'rk-ml-note';
@@ -2757,10 +2820,12 @@
     const replaceAll = makeButton('All', replaceAllMatches);
     const close = makeButton('×', closeFindBar);
     for (const btn of [prev, next, replaceOne, replaceAll, close]) btn.classList.add('rk-find-mini');
+    // Typing searches the open locale only. Walking every locale switches
+    // MoEngage tabs, so it runs only from the "Search all locales" button.
     find.addEventListener('input', () => {
       updateSearchHighlights(find.value, -1);
+      resetMultiLocalePlanForQuery();
       renderMultiLocaleDrawer(true);
-      scheduleMultiLocaleAutoScan();
     });
     find.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); findNext(find.value, event.shiftKey ? -1 : 1); }
@@ -2900,7 +2965,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.4</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.5</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2925,7 +2990,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.4',
+        version: '0.8.5',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3356,7 +3421,14 @@
         if (pendingRtl && htmlEquivalentForSync(pendingRtl.html, next)) {
           diagBreadcrumb('rtl.fix.sync-rejected', { ...(pendingRtl.meta || {}), revision: startedRevision, reason });
         }
-        diagIncident('moengage_sync_rejected', reason, { revision: startedRevision, durationMs: Date.now() - startedAt, html: next });
+        diagIncident('moengage_sync_rejected', reason, {
+          revision: startedRevision,
+          durationMs: Date.now() - startedAt,
+          html: next,
+          outcome: result.outcome || '',
+          nativeLength: result.nativeLength,
+          diff: result.diff || null,
+        });
         status(reason, 'error');
         return false;
       }
@@ -3422,7 +3494,7 @@
       now: Date.now(),
     })) {
       STATE.dirty = true;
-      diagIncident('late_native_revert', 'MoEngage changed the HTML shortly after RetKit applied it', { revision: STATE.editRevision, nativeHtml: next, localHtml: current });
+      diagIncident('late_native_revert', 'MoEngage changed the HTML shortly after RetKit applied it', { revision: STATE.editRevision, nativeHtml: next, localHtml: current, diff: describeHtmlDifference(current, next) });
       status('MoEngage reverted the latest revision · local code preserved', 'error');
       return;
     }
@@ -3969,7 +4041,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.4 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.5 loaded');
   }
 
   boot();
@@ -5639,7 +5711,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.4',
+          clientVersion: '0.8.5',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -7972,7 +8044,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.4');
+    setTextContentIfChanged(version, 'v0.8.5');
     return true;
   }
 
@@ -10799,7 +10871,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.4' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.5' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -10825,7 +10897,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.4 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.5 loaded');
   }
 
   bootBridge();

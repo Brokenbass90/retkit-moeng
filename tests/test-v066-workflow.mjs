@@ -10,7 +10,7 @@ assert(!source.includes("makeButton('Scan locales'"), 'v0.6.6 removes manual Sca
 assert(!source.includes("makeButton('Rollback last'"), 'v0.6.6 removes rollback button from find UI');
 assert(!source.includes("makeButton('Cancel'"), 'v0.6.6 removes cancel button from find UI');
 assert(source.includes('Replace ${selectedMatches} match'), 'v0.6.6 exposes one replace-across-locales action');
-assert(source.includes('scheduleMultiLocaleAutoScan'), 'Cmd+F/find changes trigger automatic locale scan');
+assert(source.includes('Search all locales'), 'all-locales search runs from an explicit button');
 
 // Validator contract: template-bearing tags still participate in structural parsing,
 // and missing image src is a warning rather than a blocking syntax error.
