@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.3
+// @version      0.8.4
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -2900,7 +2900,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.3</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.4</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2925,7 +2925,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.3',
+        version: '0.8.4',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3969,7 +3969,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.3 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.4 loaded');
   }
 
   boot();
@@ -5062,31 +5062,161 @@ function setAttr(attrs, name, value, { overwrite = false } = {}) {
   return ` ${name}="${value}"${attrs}`;
 }
 
+/* ─── Illustration cards: text goes RTL, the picture stays put ──────
+ * A card whose background is a large illustration anchored to one side
+ * ("right bottom", "right center", background-size 200–460px) keeps its
+ * text column on the opposite side by design. Mirroring such a card moves
+ * the text onto the picture. So inside it RetKit changes only the text:
+ * the card gets dir="ltr" (stops the inherited RTL from re-flowing the
+ * column), every paragraph/heading inside gets dir="rtl" + text-align:right,
+ * and neither the background position nor any side is swapped.
+ * Small side icons with padding reserved for them (icon 56px + padding-left
+ * 70px) are a different pattern — those mirror as a whole, icon and text.
+ */
+const ILLUSTRATION_MIN_PX = 120;
+const VOID_TAGS = /^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/i;
+const DOC_TEXT_TAGS = /^(?:p|h[1-6]|li)$/i;
+
+function readStyle(attrs) {
+  const m = String(attrs || '').match(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/i);
+  return m ? m[2] : '';
+}
+
+function backgroundSidePx(style, cssByClass, classes) {
+  // background shorthand / background-position with a left|right keyword, plus size.
+  const sources = [style, ...classes.map((c) => cssByClass.get(c) || '')];
+  let side = '';
+  let size = 0;
+  let pad = { left: 0, right: 0 };
+  for (const css of sources) {
+    const bg = css.match(/\bbackground(?:-position)?\s*:\s*([^;}]+)/i);
+    if (bg && /url\(/i.test(css)) {
+      const kw = bg[1].replace(/url\([^)]*\)/gi, '').match(/\b(left|right)\b/i);
+      if (kw && !side) side = kw[1].toLowerCase();
+    }
+    const sz = css.match(/\bbackground-size\s*:\s*(\d+)px/i);
+    if (sz && !size) size = Number(sz[1]);
+    for (const k of ['left', 'right']) {
+      const pm = css.match(new RegExp(`\\bpadding-${k}\\s*:\\s*(\\d+)px`, 'i'));
+      if (pm) pad[k] = Math.max(pad[k], Number(pm[1]));
+    }
+  }
+  return { side, size, pad };
+}
+
+function isIllustrationCard(attrs, cssByClass) {
+  const style = readStyle(attrs);
+  const classes = (readAttr(attrs, 'class') || '').split(/\s+/).filter(Boolean);
+  if (!/url\(/i.test(style) && !classes.some((c) => /url\(/i.test(cssByClass.get(c) || ''))) return false;
+  const { side, size, pad } = backgroundSidePx(style, cssByClass, classes);
+  if (!side) return false;
+  // Icon with room reserved next to it → mirrors as one piece.
+  if (pad[side] > 0 && (!size || pad[side] >= size)) return false;
+  return !size || size >= ILLUSTRATION_MIN_PX;
+}
+
+function cssRulesByClass(html) {
+  const map = new Map();
+  const css = (String(html).match(/<style\b[^>]*>([\s\S]*?)<\/style>/gi) || []).join('\n');
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const sel of m[1].split(',')) {
+      const last = sel.trim().match(/\.([\w-]+)$/);
+      if (last) map.set(last[1], `${map.get(last[1]) || ''};${m[2]}`);
+    }
+  }
+  return map;
+}
+
+function ensureTextRight(attrs) {
+  if (/\bstyle\s*=/i.test(attrs)) {
+    return attrs.replace(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/i, (_f, q, body) => {
+      if (/\btext-align\s*:/i.test(body)) {
+        return `style=${q}${body.replace(/\b(text-align\s*:\s*)(left|start)\b/gi, (_m, h) => `${h}right`)}${q}`;
+      }
+      return `style=${q}${body.replace(/\s*;?\s*$/, ';')} text-align: right;${q}`;
+    });
+  }
+  return `${attrs} style="text-align: right;"`;
+}
+
 function applyDocumentRtl(html, opts = {}) {
   const lang = String(opts.lang || 'ar').replace(/[^a-zA-Z_-]/g, '').replace('_', '-') || 'ar';
-  let out = html.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
-    (_m, open, css, close) => `${open}${mirrorCssForDocument(css)}${close}`);
-  out = out.replace(/<([a-z][\w:-]*)([^>]*)>/gi, (m, tag, attrs) => {
-    if (/^(?:style|script)$/i.test(tag)) return m;
-    let next = attrs;
-    if (/\bstyle\s*=/i.test(next)) {
-      next = next.replace(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/i, (_f, q, body) => `style=${q}${mirrorCssForDocument(body)}${q}`);
+  const cssByClass = cssRulesByClass(html);
+  const keepIllustrations = opts.keepIllustrations !== false;
+
+  // Illustration classes found in the markup: their <style> rules keep the
+  // background where it is (mobile media queries included).
+  const frozenClasses = new Set();
+  if (keepIllustrations) {
+    for (const m of html.matchAll(/<([a-z][\w:-]*)\b([^>]*)>/gi)) {
+      if (/^(?:style|script|html|body)$/i.test(m[1])) continue;
+      if (!isIllustrationCard(m[2], cssByClass)) continue;
+      for (const c of (readAttr(m[2], 'class') || '').split(/\s+/).filter(Boolean)) {
+        if (/url\(/i.test(cssByClass.get(c) || '')) frozenClasses.add(c);
+      }
     }
-    if (/\balign\s*=/i.test(next)) next = flipAlignAttr(next).replace(/\balign\s*=\s*(["']?)right\1(?![\s\S]*\balign=)/i, 'align="right"');
+  }
+
+  let out = html.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, open, css, close) => {
+    const mirrored = css.replace(/([^{}]+)\{([^{}]*)\}/g, (rule, selector, body) => {
+      const frozen = selector.split(',').some((sel) => {
+        const last = sel.trim().match(/\.([\w-]+)$/);
+        return last && frozenClasses.has(last[1]);
+      });
+      return frozen ? rule : `${selector}{${mirrorCssForDocument(body)}}`;
+    });
+    return `${open}${mirrored}${close}`;
+  });
+
+  const stack = []; // open element tags; entries { tag, frozen }
+  let frozenDepth = 0;
+  const illustrations = [];
+  out = out.replace(/<(\/?)([a-z][\w:-]*)([^>]*)>/gi, (m, closing, tag, attrs) => {
     const lower = tag.toLowerCase();
-    if (lower === 'html') {
-      next = setAttr(next, 'lang', lang, { overwrite: true });
-      next = setAttr(next, 'dir', 'rtl', { overwrite: true });
-    } else if (lower === 'body') {
-      next = setAttr(next, 'dir', 'rtl', { overwrite: true });
+    if (/^(?:style|script)$/i.test(lower)) return m;
+    if (closing) {
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        if (stack[i].tag !== lower) continue;
+        for (const popped of stack.splice(i)) if (popped.frozen) frozenDepth -= 1;
+        break;
+      }
+      return m;
+    }
+    const selfClosing = VOID_TAGS.test(lower) || /\/\s*$/.test(attrs);
+    let next = attrs;
+    const startsFrozen = keepIllustrations && frozenDepth === 0 && !/^(?:html|body)$/.test(lower) && isIllustrationCard(attrs, cssByClass);
+
+    if (frozenDepth > 0 || startsFrozen) {
+      if (startsFrozen) {
+        next = setAttr(next, 'dir', 'ltr', { overwrite: true });
+        illustrations.push((readAttr(attrs, 'class') || lower).split(/\s+/)[0]);
+      } else if (DOC_TEXT_TAGS.test(lower)) {
+        next = ensureTextRight(setAttr(next, 'dir', 'rtl', { overwrite: true }));
+      }
+    } else {
       if (/\bstyle\s*=/i.test(next)) {
-        if (!/\bdirection\s*:/i.test(next)) next = next.replace(/\bstyle\s*=\s*(["'])/i, (f) => `${f}direction: rtl; `);
-      } else next = `${next} style="direction: rtl;"`;
-    } else if (DOC_BLOCK_TAGS.test(lower)) {
-      next = setAttr(next, 'dir', 'rtl');
+        next = next.replace(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/i, (_f, q, body) => `style=${q}${mirrorCssForDocument(body)}${q}`);
+      }
+      if (/\balign\s*=/i.test(next)) next = flipAlignAttr(next);
+      if (lower === 'html') {
+        next = setAttr(next, 'lang', lang, { overwrite: true });
+        next = setAttr(next, 'dir', 'rtl', { overwrite: true });
+      } else if (lower === 'body') {
+        next = setAttr(next, 'dir', 'rtl', { overwrite: true });
+        if (/\bstyle\s*=/i.test(next)) {
+          if (!/\bdirection\s*:/i.test(next)) next = next.replace(/\bstyle\s*=\s*(["'])/i, (f) => `${f}direction: rtl; `);
+        } else next = `${next} style="direction: rtl;"`;
+      } else if (DOC_BLOCK_TAGS.test(lower)) {
+        next = setAttr(next, 'dir', 'rtl');
+      }
+    }
+    if (!selfClosing) {
+      stack.push({ tag: lower, frozen: startsFrozen });
+      if (startsFrozen) frozenDepth += 1;
     }
     return next === attrs ? m : `<${tag}${next}>`;
   });
+  if (typeof opts.onReport === 'function') opts.onReport({ illustrations });
   // The marker goes after the opening <html> (doctype stays first).
   return markRtlApplied(out, 'document');
 }
@@ -5509,7 +5639,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.3',
+          clientVersion: '0.8.4',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -7842,7 +7972,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.3');
+    setTextContentIfChanged(version, 'v0.8.4');
     return true;
   }
 
@@ -9049,8 +9179,13 @@ module.exports = { isRtlLocale, applyRtl };
     if (!engine?.applyRtl) return null;
     const lang = (localeLanguage(locale) || 'AR').toLowerCase();
     let out;
+    let illustrations = 0;
     try {
-      out = engine.applyRtl(String(html || ''), { mode: 'document', lang: lang === 'en' ? 'ar' : lang });
+      out = engine.applyRtl(String(html || ''), {
+        mode: 'document',
+        lang: lang === 'en' ? 'ar' : lang,
+        onReport: (report) => { illustrations = Array.isArray(report?.illustrations) ? report.illustrations.length : 0; },
+      });
     } catch (error) {
       if (error?.code === 'RETKIT_RTL_MODE_CONFLICT') {
         return { error: 'это письмо уже переведено в RTL другим способом — откройте ↶ Original и примените ещё раз' };
@@ -9061,7 +9196,7 @@ module.exports = { isRtlLocale, applyRtl };
     const count = (value, re) => (String(value).match(re) || []).length;
     const blockCount = count(out, /\sdir="rtl"/g) - count(html, /\sdir="rtl"/g);
     const sideCount = count(out, /(?:padding|margin|border)-(?:left|right)|float\s*:|text-align\s*:\s*right/gi);
-    return { mode: 'document', html: out, totalCount: Math.max(1, blockCount), blockCount: Math.max(0, blockCount), sideCount };
+    return { mode: 'document', html: out, totalCount: Math.max(1, blockCount), blockCount: Math.max(0, blockCount), sideCount, illustrations };
   }
 
   function applyRtlFix() {
@@ -9128,7 +9263,7 @@ module.exports = { isRtlLocale, applyRtl };
       afterLength: result.html.length,
     });
     workspaceStatus(result.mode === 'document'
-      ? `RTL Fix · ${localeUiLabel(active) || 'locale'}: письмо арабизировано — ${result.blockCount} блоков справа налево, ${result.sideCount} сторон отзеркалено. Ещё раз — вернуть как было`
+      ? `RTL Fix · ${localeUiLabel(active) || 'locale'}: письмо арабизировано — ${result.blockCount} блоков справа налево, ${result.sideCount} сторон отзеркалено${result.illustrations ? `, карточек с картинкой на фоне оставлено на месте: ${result.illustrations}` : ''}. Ещё раз — вернуть как было`
       : `RTL Fix applied${active ? ` · ${active}` : ''}: ${result.paragraphCount} p + ${result.cellCount} td + ${result.alignCount || 0} aligned containers`, 'ok');
     updateLocaleUi(false);
   }
@@ -10664,7 +10799,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.3' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.4' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -10690,7 +10825,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.3 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.4 loaded');
   }
 
   bootBridge();

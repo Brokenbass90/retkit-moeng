@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.3
+// @version      0.8.4
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -1020,7 +1020,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.3');
+    setTextContentIfChanged(version, 'v0.8.4');
     return true;
   }
 
@@ -2227,8 +2227,13 @@
     if (!engine?.applyRtl) return null;
     const lang = (localeLanguage(locale) || 'AR').toLowerCase();
     let out;
+    let illustrations = 0;
     try {
-      out = engine.applyRtl(String(html || ''), { mode: 'document', lang: lang === 'en' ? 'ar' : lang });
+      out = engine.applyRtl(String(html || ''), {
+        mode: 'document',
+        lang: lang === 'en' ? 'ar' : lang,
+        onReport: (report) => { illustrations = Array.isArray(report?.illustrations) ? report.illustrations.length : 0; },
+      });
     } catch (error) {
       if (error?.code === 'RETKIT_RTL_MODE_CONFLICT') {
         return { error: 'это письмо уже переведено в RTL другим способом — откройте ↶ Original и примените ещё раз' };
@@ -2239,7 +2244,7 @@
     const count = (value, re) => (String(value).match(re) || []).length;
     const blockCount = count(out, /\sdir="rtl"/g) - count(html, /\sdir="rtl"/g);
     const sideCount = count(out, /(?:padding|margin|border)-(?:left|right)|float\s*:|text-align\s*:\s*right/gi);
-    return { mode: 'document', html: out, totalCount: Math.max(1, blockCount), blockCount: Math.max(0, blockCount), sideCount };
+    return { mode: 'document', html: out, totalCount: Math.max(1, blockCount), blockCount: Math.max(0, blockCount), sideCount, illustrations };
   }
 
   function applyRtlFix() {
@@ -2306,7 +2311,7 @@
       afterLength: result.html.length,
     });
     workspaceStatus(result.mode === 'document'
-      ? `RTL Fix · ${localeUiLabel(active) || 'locale'}: письмо арабизировано — ${result.blockCount} блоков справа налево, ${result.sideCount} сторон отзеркалено. Ещё раз — вернуть как было`
+      ? `RTL Fix · ${localeUiLabel(active) || 'locale'}: письмо арабизировано — ${result.blockCount} блоков справа налево, ${result.sideCount} сторон отзеркалено${result.illustrations ? `, карточек с картинкой на фоне оставлено на месте: ${result.illustrations}` : ''}. Ещё раз — вернуть как было`
       : `RTL Fix applied${active ? ` · ${active}` : ''}: ${result.paragraphCount} p + ${result.cellCount} td + ${result.alignCount || 0} aligned containers`, 'ok');
     updateLocaleUi(false);
   }
@@ -3842,7 +3847,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.3' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.4' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -3868,7 +3873,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.3 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.4 loaded');
   }
 
   bootBridge();

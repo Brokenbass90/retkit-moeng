@@ -46,6 +46,15 @@ if (fs.existsSync(studio)) {
   assert.ok(read('src/shared/rtl-core.js').includes(body), 'run: node scripts/sync-rtl-core.mjs');
 }
 
+// Карточки с большой картинкой на фоне: текст RTL, карточка и картинка на месте.
+{
+  let report = null;
+  const w7 = engine.applyRtl(read('tests/fixtures/rtl/photo-welcome7.source.html'), { mode: 'document', onReport: (r) => { report = r; } });
+  assert.deepEqual(Array.from(report.illustrations), ['bg1', 'bg2', 'bg3']);
+  assert.match(w7, /<div dir="ltr" class="bg1" style="background: url\([^)]+\) right bottom/);
+  assert.match(w7, /class="bg4" style="background: url\([^)]+\) right center/, 'small side icons still mirror');
+}
+
 const bridge = read('src/moengage/native-bridge.user.js');
 assert.match(bridge, /documentRtl\(currentHtml, active\) \|\| transformRtlHtml\(/, 'RTL Fix uses the document engine, old one as fallback');
 assert.match(read('scripts/build.mjs'), /src\/shared\/rtl-core\.js/);
