@@ -2722,7 +2722,8 @@
         if (persisted) root.__RetKitPendingRtlVerification = null;
       }
       if (durationMs > 3500) diagIncident('slow_sync', `MoEngage sync took ${durationMs}ms`, { revision: startedRevision, durationMs, html: next });
-      status('Applied to MoEngage', 'ok');
+      const savedLocale = STATE.boundLocale || currentBridgeLocale();
+      status(`${savedLocale ? `${savedLocale} · ` : ''}saved to MoEngage ✓ ${new Date().toLocaleTimeString().slice(0, 5)}`, 'ok');
 
       for (const delay of [250, 700, 1400]) {
         setTimeout(() => refreshPreviewFromMoEngage(false), delay);
@@ -2760,7 +2761,9 @@
     if (htmlEquivalentForSync(next, current)) return;
     const nextLang = String(next.match(/<html\b[^>]*\blang=["']([^"']+)/i)?.[1] || '').toLowerCase();
     const currentLang = String(current.match(/<html\b[^>]*\blang=["']([^"']+)/i)?.[1] || '').toLowerCase();
-    const looksLikeLocaleSwitch = Boolean(nextLang && currentLang && nextLang !== currentLang);
+    const looksLikeLocaleSwitch = Boolean(nextLang && currentLang && nextLang !== currentLang)
+      || Date.now() < (Number(STATE.localeSwitchUntil) || 0)
+      || Boolean(STATE.boundLocale && currentBridgeLocale() && currentBridgeLocale() !== STATE.boundLocale);
     if (!looksLikeLocaleSwitch && shouldTreatNativeMismatchAsLateRevert({
       sameContent: false,
       lastAppliedRevision: STATE.lastAppliedRevision,
@@ -2793,10 +2796,13 @@
   async function flushBeforeLocaleSwitch(options = {}) {
     const timeoutMs = Number(options.timeoutMs) || 12000;
     const started = Date.now();
+    // From here until the new locale is bound, a different native HTML is the
+    // locale change itself, never a revert of our write.
+    STATE.localeSwitchUntil = started + timeoutMs + 6000;
     clearTimeout(STATE.syncTimer);
     STATE.syncTimer = null;
     while (STATE.applying && Date.now() - started < timeoutMs) await sleep(80);
-    if (STATE.applying) return { ok: false, reason: 'MoEngage is still saving this locale — try again in a moment' };
+    if (STATE.applying) { STATE.localeSwitchUntil = 0; return { ok: false, reason: 'MoEngage is still saving this locale — try again in a moment' }; }
     if (!STATE.dirty) return { ok: true, reason: '' };
     diagBreadcrumb('locale.switch.flush', { revision: STATE.editRevision });
     status('Saving this locale before switching…', 'neutral');
@@ -2808,7 +2814,8 @@
     }
     if (STATE.dirty) {
       diagIncident('locale_switch_blocked_unsaved', 'Locale switch stopped: the current edit did not reach MoEngage', { revision: STATE.editRevision, html: STATE.overlayEditor?.getValue?.() || '' });
-      return { ok: false, reason: 'This locale was NOT saved in MoEngage — switch stopped so the edit is not lost' };
+      STATE.localeSwitchUntil = 0;
+      return { ok: false, reason: `${STATE.boundLocale || 'This locale'} was NOT saved in MoEngage — switch stopped so the edit is not lost` };
     }
     return { ok: true, reason: '' };
   }
@@ -2817,13 +2824,11 @@
     const overlay = STATE.overlayEditor;
     const nextNative = getNativeEditor();
     if (!overlay || !nextNative) return false;
-    // Last line of defence: an edit that never reached MoEngage is kept in
-    // memory for its locale, and restored when the user comes back to it.
-    if (STATE.dirty && STATE.boundLocale) {
-      const html = overlay.getValue();
-      STATE.unsavedByLocale = { ...(STATE.unsavedByLocale || {}), [STATE.boundLocale]: { html, at: Date.now() } };
-      diagIncident('unsaved_edit_stashed', `Unsaved ${STATE.boundLocale} edit kept in RetKit on locale change`, { locale: STATE.boundLocale, html });
-    }
+    // A locale change: the overlay now shows exactly what MoEngage holds for
+    // the new locale. A recent write to the previous locale must not be
+    // compared with the new one (that looked like a "late revert").
+    STATE.lastAppliedAt = 0;
+    STATE.localeSwitchUntil = Date.now() + 1500;
 
     if (STATE.nativeEditor && STATE.nativeChangeHandler) {
       try { STATE.nativeEditor.off?.('change', STATE.nativeChangeHandler); } catch {}
@@ -2851,15 +2856,6 @@
       STATE.localPreviewUntil = 0;
       STATE.previewHtml = '';
       STATE.boundLocale = currentBridgeLocale();
-      const stash = STATE.boundLocale ? STATE.unsavedByLocale?.[STATE.boundLocale] : null;
-      if (stash && !htmlEquivalentForSync(stash.html, next)) {
-        overlay.setValue(stash.html);
-        STATE.dirty = true;
-        STATE.editRevision = nextEditRevision(STATE.editRevision);
-        diagBreadcrumb('locale.unsaved.restored', { locale: STATE.boundLocale, length: stash.html.length });
-        setTimeout(() => scheduleNativeSync(300), 0);
-      }
-      if (STATE.unsavedByLocale && STATE.boundLocale) delete STATE.unsavedByLocale[STATE.boundLocale];
       clearSearchMarks();
       clearFoldMarks();
       scheduleFoldRefresh();
@@ -2877,7 +2873,7 @@
     nextNative.refresh?.();
     STATE.overlayEditor?.refresh?.();
     scheduleWorkspaceLayoutRefresh();
-    status(STATE.dirty ? `Restored your unsaved ${STATE.boundLocale} edit · saving to MoEngage…` : 'Updated from MoEngage', STATE.dirty ? 'warn' : 'ok');
+    status(`${STATE.boundLocale ? `${STATE.boundLocale} · ` : ''}loaded from MoEngage`, 'ok');
     return true;
   }
 

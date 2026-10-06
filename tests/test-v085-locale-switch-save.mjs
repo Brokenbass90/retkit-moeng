@@ -24,15 +24,15 @@ assert.match(flush, /pushOverlayToNative\(true\)/, 'writes the edit now');
 assert.match(flush, /locale_switch_blocked_unsaved/, 'blocked switch reaches Diagnostics');
 assert.match(core, /flushBeforeLocaleSwitch: \(options\) => flushBeforeLocaleSwitch\(options\)/, 'exposed to the bridge');
 
-// Rebind never silently drops an unsaved edit: it is stashed per locale and restored.
+// A locale change is never a "late revert": the overlay takes the new
+// locale's HTML as is, and nothing from one locale is ever written to another.
 const rebind = between(core, 'function rebindNativeEditorFromMoEngage', 'function currentBridgeLocale');
-const stashAt = rebind.indexOf('unsavedByLocale = {');
-const overwriteAt = rebind.indexOf('overlay.setValue(next)');
-assert.ok(stashAt > 0 && overwriteAt > stashAt, 'stash happens before the editor is overwritten');
-assert.match(rebind, /locale\.unsaved\.restored/, 'coming back restores the stash');
-assert.match(rebind, /scheduleNativeSync\(300\)/, 'restored edit is saved again');
-
-console.log('✓ RetKit v0.8.5 locale switch saves first, never drops an unsaved edit');
+assert.doesNotMatch(rebind, /unsavedByLocale|scheduleNativeSync/, 'rebind never re-injects or writes another locale\'s HTML');
+assert.match(rebind, /STATE\.lastAppliedAt = 0;/, 'previous locale write is not compared with the new locale');
+const pull = between(core, 'function pullNativeToOverlay', 'function rebindNativeEditorFromMoEngage');
+assert.match(pull, /localeSwitchUntil/, 'pull treats a switch window as a locale change');
+assert.match(pull, /currentBridgeLocale\(\) !== STATE\.boundLocale/, 'pull treats another active locale as a locale change');
+assert.doesNotMatch(core, /unsavedByLocale|unsaved_edit_stashed/, 'the cross-locale stash is gone');
 
 // Slow MoEngage settle is not a rejection.
 const commit = between(core, 'async function commitThroughFroala', 'function describeHtmlDifference');
