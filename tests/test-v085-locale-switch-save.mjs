@@ -33,3 +33,9 @@ assert.match(rebind, /locale\.unsaved\.restored/, 'coming back restores the stas
 assert.match(rebind, /scheduleNativeSync\(300\)/, 'restored edit is saved again');
 
 console.log('✓ RetKit v0.8.5 locale switch saves first, never drops an unsaved edit');
+
+// Slow MoEngage settle is not a rejection.
+const commit = between(core, 'async function commitThroughFroala', 'function describeHtmlDifference');
+assert.match(commit, /for \(let waited = 0; !ok && waited < 3000/, 'commit waits up to 3s more before calling it rejected');
+assert.match(commit, /sync\.settled-late/, 'late settle is visible in Diagnostics');
+console.log('✓ RetKit v0.8.5 slow MoEngage settle is not a rejection');

@@ -1089,9 +1089,21 @@
     const keptOnce = htmlEquivalentForSync((getNativeEditor() || native).getValue?.(), next);
     if (fast) return { ok: Boolean(keptOnce), tentative: true, reason: keptOnce ? '' : 'MoEngage did not keep the native HTML' };
     await sleep(500);
-    const nativeAfter = (getNativeEditor() || native).getValue?.() || '';
+    let nativeAfter = (getNativeEditor() || native).getValue?.() || '';
     const keptTwice = htmlEquivalentForSync(nativeAfter, next);
-    const ok = Boolean(keptOnce && keptTwice);
+    let ok = Boolean(keptOnce && keptTwice);
+    // On large emails MoEngage can show the old HTML for a few seconds and
+    // then settle on the new one (logs: "rejected", then "already in sync"
+    // a second later). Give it time before calling it a rejection.
+    for (let waited = 0; !ok && waited < 3000; waited += 300) {
+      await sleep(300);
+      const a = (getNativeEditor() || native).getValue?.() || '';
+      if (!htmlEquivalentForSync(a, next)) { nativeAfter = a; continue; }
+      await sleep(300);
+      nativeAfter = (getNativeEditor() || native).getValue?.() || '';
+      ok = htmlEquivalentForSync(nativeAfter, next);
+      if (ok) diagBreadcrumb('sync.settled-late', { waitedMs: 1200 + waited + 600 });
+    }
     if (ok) return { ok, reason: '' };
     // What did MoEngage actually keep? "reverted" = back to the old HTML,
     // "changed" = it kept something else (its own rewrite or another locale).
