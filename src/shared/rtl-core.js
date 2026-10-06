@@ -1056,18 +1056,48 @@ function applyDocumentRtl(html, opts = {}) {
   return markRtlApplied(out, 'document');
 }
 
+// An email that is already arabized as a whole: the RetKit document marker,
+// or dir="rtl" on <html>/<body> (a hand-made AR version, or ours after
+// MoEngage dropped the HTML comment). Such an email is left as it is.
+function isArabizedDocument(html) {
+  const source = String(html || '');
+  if (getAppliedRtlMode(source) === 'document') return true;
+  return /<(?:html|body)\b[^>]*\bdir\s*=\s*(["']?)rtl\1/i.test(source);
+}
+
 function applyRtl(html, opts = {}) {
   if (!html || typeof html !== 'string') return html;
   const mode = normalizeRtlMode(opts);
+  // Already arabized → never arabize again (any mode) and never error out.
+  if (isArabizedDocument(html)) {
+    if (typeof opts.onReport === 'function') opts.onReport({ alreadyRtl: true, illustrations: [] });
+    return html;
+  }
   const appliedMode = getAppliedRtlMode(html);
   if (appliedMode) {
     if (appliedMode === mode) return html;
+    // A fragment RTL-ed in another mode is still RTL: a full arabization on
+    // top would mirror sides twice. Keep it, say so.
+    if (mode === 'document') {
+      if (typeof opts.onReport === 'function') opts.onReport({ alreadyRtl: true, appliedMode, illustrations: [] });
+      return html;
+    }
     throw createRtlModeConflict(appliedMode, mode);
   }
   // v1/data-retkit-rtl had no mode metadata. A second pass cannot safely
   // infer whether physical sides were already swapped, so require Original.
-  if (hasRtlAppliedMarker(html)) throw createRtlModeConflict('legacy/unknown', mode);
+  if (hasRtlAppliedMarker(html)) {
+    if (mode === 'document') {
+      if (typeof opts.onReport === 'function') opts.onReport({ alreadyRtl: true, appliedMode: 'legacy', illustrations: [] });
+      return html;
+    }
+    throw createRtlModeConflict('legacy/unknown', mode);
+  }
   if (looksLikeLegacyRtlOutput(html)) {
+    if (mode === 'document') {
+      if (typeof opts.onReport === 'function') opts.onReport({ alreadyRtl: true, appliedMode: 'mirror', illustrations: [] });
+      return html;
+    }
     if (mode !== 'mirror') throw createRtlModeConflict('mirror', mode);
     return markRtlApplied(html, 'mirror');
   }

@@ -2228,11 +2228,15 @@
     const lang = (localeLanguage(locale) || 'AR').toLowerCase();
     let out;
     let illustrations = 0;
+    let alreadyRtl = false;
     try {
       out = engine.applyRtl(String(html || ''), {
         mode: 'document',
         lang: lang === 'en' ? 'ar' : lang,
-        onReport: (report) => { illustrations = Array.isArray(report?.illustrations) ? report.illustrations.length : 0; },
+        onReport: (report) => {
+          illustrations = Array.isArray(report?.illustrations) ? report.illustrations.length : 0;
+          alreadyRtl = Boolean(report?.alreadyRtl);
+        },
       });
     } catch (error) {
       if (error?.code === 'RETKIT_RTL_MODE_CONFLICT') {
@@ -2240,7 +2244,7 @@
       }
       return null;
     }
-    if (out === html) return { mode: 'document', html: out, totalCount: 0 };
+    if (out === html) return { mode: 'document', html: out, totalCount: 0, alreadyRtl };
     const count = (value, re) => (String(value).match(re) || []).length;
     const blockCount = count(out, /\sdir="rtl"/g) - count(html, /\sdir="rtl"/g);
     const sideCount = count(out, /(?:padding|margin|border)-(?:left|right)|float\s*:|text-align\s*:\s*right/gi);
@@ -2284,7 +2288,8 @@
       return;
     }
     if (!result.totalCount) {
-      workspaceStatus('RTL Fix: nothing to change', 'ok');
+      workspaceStatus(result.alreadyRtl ? 'RTL Fix: письмо уже арабизировано — ничего не менял' : 'RTL Fix: nothing to change', 'ok');
+      diagBreadcrumb('rtl.fix.skipped', { locale: active || '', reason: result.alreadyRtl ? 'already-rtl' : 'no-change' });
       return;
     }
 
