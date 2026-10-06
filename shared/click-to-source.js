@@ -1,4 +1,4 @@
-/*! RetKit click-to-source v0.8.2 — generated from retkit-moeng
+/*! RetKit click-to-source v0.8.3 — generated from retkit-moeng
  *  src/core/retkit-moengage-core.user.js by scripts/export-click-to-source.mjs.
  *  Do not edit by hand: change the core, run `npm run build`, copy shared/click-to-source.js. */
 (function (root) {
@@ -480,7 +480,7 @@
   }
 
   root.RetKitClickToSource = {
-    version: '0.8.2',
+    version: '0.8.3',
     findRangeFromDescriptor,
     descriptorFromElement,
     getPointTextFromClick,

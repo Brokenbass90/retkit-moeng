@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.2
+// @version      0.8.3
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -1020,7 +1020,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.2');
+    setTextContentIfChanged(version, 'v0.8.3');
     return true;
   }
 
@@ -2222,6 +2222,26 @@
     return editor.getValue() === String(nextHtml || '');
   }
 
+  function documentRtl(html, locale) {
+    const engine = root.RetKitRtlCore;
+    if (!engine?.applyRtl) return null;
+    const lang = (localeLanguage(locale) || 'AR').toLowerCase();
+    let out;
+    try {
+      out = engine.applyRtl(String(html || ''), { mode: 'document', lang: lang === 'en' ? 'ar' : lang });
+    } catch (error) {
+      if (error?.code === 'RETKIT_RTL_MODE_CONFLICT') {
+        return { error: 'это письмо уже переведено в RTL другим способом — откройте ↶ Original и примените ещё раз' };
+      }
+      return null;
+    }
+    if (out === html) return { mode: 'document', html: out, totalCount: 0 };
+    const count = (value, re) => (String(value).match(re) || []).length;
+    const blockCount = count(out, /\sdir="rtl"/g) - count(html, /\sdir="rtl"/g);
+    const sideCount = count(out, /(?:padding|margin|border)-(?:left|right)|float\s*:|text-align\s*:\s*right/gi);
+    return { mode: 'document', html: out, totalCount: Math.max(1, blockCount), blockCount: Math.max(0, blockCount), sideCount };
+  }
+
   function applyRtlFix() {
     const editor = getOverlayEditor();
     if (!editor) {
@@ -2250,7 +2270,14 @@
       return;
     }
 
-    const result = transformRtlHtml(currentHtml, { allParagraphs: true });
+    // Полная арабизация (тот же движок, что в студии): dir/lang у письма,
+    // dir="rtl" на блоках, зеркальные стороны inline и в <style>. Старый
+    // точечный RTL остаётся запасным, если движок не загрузился.
+    const result = documentRtl(currentHtml, active) || transformRtlHtml(currentHtml, { allParagraphs: true });
+    if (result.error) {
+      workspaceStatus(`RTL Fix: ${result.error}`, 'error');
+      return;
+    }
     if (!result.totalCount) {
       workspaceStatus('RTL Fix: nothing to change', 'ok');
       return;
@@ -2271,13 +2298,16 @@
     editor.focus?.();
     diagBreadcrumb('rtl.fix.applied', {
       locale: active || '',
+      mode: result.mode || 'text',
       paragraphCount: result.paragraphCount,
       cellCount: result.cellCount,
       alignCount: result.alignCount || 0,
       beforeLength: currentHtml.length,
       afterLength: result.html.length,
     });
-    workspaceStatus(`RTL Fix applied${active ? ` · ${active}` : ''}: ${result.paragraphCount} p + ${result.cellCount} td + ${result.alignCount || 0} aligned containers`, 'ok');
+    workspaceStatus(result.mode === 'document'
+      ? `RTL Fix · ${localeUiLabel(active) || 'locale'}: письмо арабизировано — ${result.blockCount} блоков справа налево, ${result.sideCount} сторон отзеркалено. Ещё раз — вернуть как было`
+      : `RTL Fix applied${active ? ` · ${active}` : ''}: ${result.paragraphCount} p + ${result.cellCount} td + ${result.alignCount || 0} aligned containers`, 'ok');
     updateLocaleUi(false);
   }
 
@@ -3812,7 +3842,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.2' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.3' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -3838,7 +3868,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.2 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.3 loaded');
   }
 
   bootBridge();
