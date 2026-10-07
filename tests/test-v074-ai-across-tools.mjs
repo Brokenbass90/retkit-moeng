@@ -19,5 +19,7 @@ console.log('✓ AI across-locales tools: find + user-approved replace');
 // Own replacement per locale: the bulk apply takes the locale's own value first.
 const applyBody = core.slice(core.indexOf('async function applyMultiLocaleReplace'), core.indexOf('\n  async function refreshLocaleManager'));
 assert.match(applyBody, /multiLocaleOverrides/, 'bulk apply honours per-locale values');
-assert.match(core, /data-rk-locale-override|dataset\.rkLocaleOverride/, 'details panel has a per-locale input');
+// v0.8.5: per-locale values stay for AI tools only; the UI has one replacement field
+// (a per-locale field was mistaken for the main one and deleted text in 8 locales).
+assert.doesNotMatch(core, /dataset\.rkLocaleOverride/, 'no per-locale input in the UI');
 console.log('✓ per-locale replacement values');

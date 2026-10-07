@@ -1,3 +1,5 @@
+// Setup once in this folder: npm i codemirror@5 playwright-core (needs a Chromium; set the path below).
+// Scenarios: read | replace | dirty | spelling ; env FIND/REPL/DOUBLE ; last arg = tab->content delay ms.
 // Fake-MoEngage harness for RetKit multi-locale find/replace.
 // usage: node run.mjs <dist.user.js> <base.html> [scenario] [swapDelay]
 import fs from 'node:fs';
@@ -63,8 +65,8 @@ if (scenario === 'replace' || scenario === 'dirty' || scenario === 'spelling') {
     await page.evaluate(() => { const cm = document.querySelector('#retkit-mo-workspace .CodeMirror').CodeMirror; cm.replaceRange('<!-- EDIT-X -->', { line: 2, ch: 0 }); });
     await page.waitForTimeout(150);
   }
-  const FIND = scenario === 'spelling' ? 'IQ Option' : 'afftrack=mail_photo-welcome8-3';
-  const REPL = scenario === 'spelling' ? 'IQ Broker' : 'afftrack=mail_NEW-CAMPAIGN';
+  const FIND = process.env.FIND || (scenario === 'spelling' ? 'IQ Option' : 'afftrack=mail_photo-welcome8-3');
+  const REPL = process.env.REPL !== undefined ? process.env.REPL : (scenario === 'spelling' ? 'IQ Broker' : 'afftrack=mail_NEW-CAMPAIGN');
   const before = await fakeStore();
   const expected = {};
   for (const [loc, html] of Object.entries(before)) expected[loc] = scenario === 'spelling' ? html.split(FIND).join(REPL).split('IQ&nbsp;Option').join(REPL).split('IQ\n            Option').join(REPL) : html.split(FIND).join(REPL);
@@ -81,12 +83,16 @@ if (scenario === 'replace' || scenario === 'dirty' || scenario === 'spelling') {
   await page.waitForFunction(() => document.querySelector('[data-rk-multilocale-apply]') && !document.querySelector('[data-rk-multilocale-apply]').disabled, null, { timeout: 60000 });
   const label = await page.textContent('[data-rk-multilocale-apply]');
   console.log('apply button:', label.trim());
+  page.on('dialog', (d) => { console.log('DIALOG:', d.message().split('\n')[0]); d.dismiss(); });
   await page.click('[data-rk-multilocale-apply]');
+  if (process.env.DOUBLE) { await page.click('[data-rk-multilocale-apply]', { force: true, timeout: 1000 }).catch(() => console.log('second click: button disabled')); }
+  if (REPL === '') { await page.waitForTimeout(1500); console.log('status:', (await page.textContent('#retkit-mo-status')).trim()); const now = await fakeStore(); console.log(JSON.stringify(now) === JSON.stringify(before) ? 'PASS empty replacement changed nothing' : 'FAIL empty replacement changed HTML'); await browser.close(); process.exit(0); }
   await page.waitForFunction(() => /Replaced|stopped/.test(document.querySelector('#retkit-mo-status')?.textContent || ''), null, { timeout: 120000 });
   console.log('status:', (await page.textContent('#retkit-mo-status')).trim());
   await page.waitForTimeout(2500);
   const after = await fakeStore();
   let bad = 0;
+  if (process.env.DIFFDUMP) { const a = after.Default, e = expected.Default; let i = 0; while (a[i] === e[i]) i++; console.log('DIFF at', i, '\nGOT ', JSON.stringify(a.slice(i - 120, i + 160)), '\nWANT', JSON.stringify(e.slice(i - 120, i + 160))); }
   for (const loc of Object.keys(expected)) {
     const ok = after[loc] === expected[loc];
     const left = after[loc].split(FIND).length - 1;

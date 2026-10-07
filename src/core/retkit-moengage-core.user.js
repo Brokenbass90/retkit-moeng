@@ -1211,6 +1211,12 @@
       .rk-ml-head strong { flex:1; font-size:13px; }
       .rk-ml-note { color:#8fa2b8; font-size:11px; line-height:1.45; padding:8px 2px; }
       .rk-ml-actions { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; align-items:center; }
+      .rk-ml-actions [data-rk-multilocale-apply]:not(:disabled) { background:#2f6bff; color:#fff; border-color:#2f6bff; font-weight:600; }
+      .rk-ml-result { display:grid; gap:3px; margin:6px 0 8px; padding:8px 10px; border:1px solid #2b3647; border-radius:8px; background:#0f1520; }
+      .rk-ml-result-title { font-weight:600; }
+      .rk-ml-result-title[data-state="ok"], .rk-ml-result-row[data-state="ok"] { color:#52d48a; }
+      .rk-ml-result-title[data-state="error"], .rk-ml-result-row[data-state="error"] { color:#ff6b6b; }
+      .rk-ml-result-row { font-size:12px; }
       .rk-ml-own { display:grid; grid-template-columns:auto 1fr; gap:8px; align-items:center; margin-bottom:4px; }
       .rk-ml-own .rk-find-input { min-width:0; }
       .rk-ml-mode { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
@@ -1583,6 +1589,8 @@
     host.replaceChildren();
     const apply = drawer.querySelector('[data-rk-multilocale-apply]');
     if (!STATE.multiLocalePlan.length) {
+      document.getElementById(IDS.multiLocaleDetails)?.replaceChildren();
+      if (STATE.multiLocaleResult) host.appendChild(renderMultiLocaleResult(STATE.multiLocaleResult));
       const empty = document.createElement('div');
       empty.className = 'rk-ml-note';
       if (STATE.multiLocaleBusy) {
@@ -1662,12 +1670,12 @@
         const selectedMatches = STATE.multiLocalePlan
           .filter((item) => selectedLocales.has(item.locale))
           .reduce((sum, item) => sum + Number(item.count || 0), 0);
-        apply.disabled = STATE.multiLocaleBusy || selected.length === 0 || selectedMatches === 0;
         const topValue = String(document.getElementById(IDS.replaceInput)?.value || '');
-        const shown = topValue === '' ? 'nothing (DELETE)' : `“${topValue.length > 30 ? `${topValue.slice(0, 30)}…` : topValue}”`;
-        apply.textContent = selected.length
-          ? `Replace ${selectedMatches} match${selectedMatches === 1 ? '' : 'es'} in ${selected.length} locale${selected.length === 1 ? '' : 's'} with ${shown}`
-          : 'Replace across locales';
+        const shown = `“${topValue.length > 30 ? `${topValue.slice(0, 30)}…` : topValue}”`;
+        apply.disabled = STATE.multiLocaleBusy || selected.length === 0 || selectedMatches === 0 || topValue === '';
+        apply.textContent = !selected.length ? 'Replace across locales'
+          : topValue === '' ? 'Write the new value in “Replace with…” first'
+            : `Replace ${selectedMatches} match${selectedMatches === 1 ? '' : 'es'} in ${selected.length} locale${selected.length === 1 ? '' : 's'} with ${shown}`;
       }
     };
     allInput.addEventListener('change', () => {
@@ -1676,6 +1684,32 @@
     });
     for (const input of host.querySelectorAll('[data-rk-locale-select]')) input.addEventListener('change', refreshApply);
     refreshApply();
+  }
+
+  // After a bulk replace: what happened in each locale, until the next search.
+  function renderMultiLocaleResult(result) {
+    const box = document.createElement('div');
+    box.className = 'rk-ml-result';
+    const okCount = result.rows.filter((r) => r.ok).length;
+    const title = document.createElement('div');
+    title.className = 'rk-ml-result-title';
+    title.dataset.state = okCount === result.rows.length ? 'ok' : 'error';
+    title.textContent = okCount === result.rows.length
+      ? `Done ✓ “${result.query}” → “${result.replacement}” in ${okCount}/${result.rows.length} locales, each read back from MoEngage`
+      : `Done in ${okCount}/${result.rows.length} locales — check the red ones`;
+    box.appendChild(title);
+    for (const row of result.rows) {
+      const line = document.createElement('div');
+      line.className = 'rk-ml-result-row';
+      line.dataset.state = row.ok ? 'ok' : 'error';
+      line.textContent = row.ok ? `✓ ${localeLabel(row.locale)} · ${row.count} replaced` : `✗ ${localeLabel(row.locale)} · ${row.reason}`;
+      box.appendChild(line);
+    }
+    const tip = document.createElement('div');
+    tip.className = 'rk-ml-note';
+    tip.textContent = 'To double-check: “Search all locales” for the OLD text must find 0.';
+    box.appendChild(tip);
+    return box;
   }
 
   function updateMultiLocaleRowState(locale, text, state = '') {
@@ -1805,6 +1839,10 @@
 
   function requestMultiLocaleScan() {
     STATE.multiLocaleScanError = '';
+    // One replacement for all locales in the UI (per-locale values only via AI tools).
+    STATE.multiLocaleOverrides = {};
+    STATE.multiLocaleOverridesQuery = '';
+    STATE.multiLocaleResult = null;
     scheduleMultiLocaleAutoScan(0);
   }
 
@@ -1877,13 +1915,13 @@
       status('Select at least one locale with matches', 'warn');
       return;
     }
-    // An empty replacement DELETES the found text. Never by accident.
+    // An empty replacement would DELETE the found text in every locale.
+    // The UI never does that: write the new value in “Replace with…”.
     const valueFor = (locale) => (Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, locale) ? String(STATE.multiLocaleOverrides[locale]) : replacement);
-    const deleting = items.filter((item) => valueFor(item.locale) === '');
-    if (deleting.length) {
-      const names = deleting.map((item) => localeLabel(item.locale)).join(', ');
-      const sure = root.confirm?.(`The “Replace with…” field is EMPTY for: ${names}.\n\n“${query}” will be DELETED there, not replaced.\n\nDelete it?`);
-      if (!sure) { status('Nothing changed: the replacement is empty', 'warn'); return; }
+    if (items.some((item) => valueFor(item.locale) === '')) {
+      status('“Replace with…” is empty — write what to put instead of the found text', 'error');
+      document.getElementById(IDS.replaceInput)?.focus();
+      return;
     }
     STATE.multiLocaleApplying = true;
     const applyButton = document.querySelector('[data-rk-multilocale-apply]');
@@ -1962,6 +2000,14 @@
         }
       }
       const totalMatches = verified.reduce((sum, item) => sum + item.count, 0);
+      STATE.multiLocaleResult = {
+        query,
+        replacement,
+        rows: [
+          ...verified.map((v) => ({ locale: v.locale, ok: true, count: v.count })),
+          ...failed.map((f) => ({ locale: f.locale, ok: false, reason: f.reason })),
+        ],
+      };
       // Persistent report (survives reload): what was searched, what it
       // became, and the first changes in every locale, before → after.
       diagIncident('multilocale_apply_report', `Bulk replace: ${verified.length}/${items.length} locales`, {
@@ -2105,14 +2151,16 @@
       note.title = 'A link with & also matches its &amp; form; the replacement keeps the encoding it replaces.';
       head.append(title, modeLabel, note);
       drawer.appendChild(head);
+      // The action sits right under the title, never below the list.
+      const actions = document.createElement('div');
+      actions.className = 'rk-ml-actions';
+      drawer.appendChild(actions);
       const rows = document.createElement('div');
       rows.id = IDS.multiLocaleRows;
       drawer.appendChild(rows);
       const details = document.createElement('div');
       details.id = IDS.multiLocaleDetails;
       drawer.appendChild(details);
-      const actions = document.createElement('div');
-      actions.className = 'rk-ml-actions';
       const hint = document.createElement('span');
       hint.className = 'rk-ml-note';
       hint.textContent = 'Uses the “Replace with…” field above.';
@@ -2120,8 +2168,7 @@
       apply.dataset.rkMultilocaleApply = '1';
       apply.classList.add('rk-find-mini');
       apply.disabled = true;
-      actions.append(hint, apply);
-      drawer.appendChild(actions);
+      actions.append(apply, hint);
       bar.insertAdjacentElement('afterend', drawer);
     }
     const modeLabel = drawer.querySelector('.rk-ml-mode');
@@ -2140,25 +2187,6 @@
     const item = STATE.multiLocalePlan.find((entry) => entry.locale === locale);
     if (!item || !item.count) return;
     STATE.multiLocaleDetailsLocale = locale;
-    const own = document.createElement('div');
-    own.className = 'rk-ml-own';
-    const ownLabel = document.createElement('span');
-    ownLabel.className = 'rk-ml-kind';
-    ownLabel.textContent = `Only ${localeLabel(locale)}, a different value (optional)`;
-    const ownInput = document.createElement('input');
-    ownInput.className = 'rk-find-input';
-    ownInput.dataset.rkLocaleOverride = locale;
-    ownInput.placeholder = 'leave empty — uses “Replace with…” at the top';
-    ownInput.autocomplete = 'off';
-    ownInput.value = Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, locale) ? STATE.multiLocaleOverrides[locale] : '';
-    ownInput.addEventListener('input', () => {
-      if (ownInput.value === '') delete STATE.multiLocaleOverrides[locale];
-      else STATE.multiLocaleOverrides[locale] = ownInput.value;
-      const chip = document.querySelector(`#${IDS.multiLocaleRows} [data-locale="${locale}"] strong`);
-      if (chip) chip.textContent = `${localeLabel(locale)} · ${item.count}${ownInput.value !== '' ? ' ✎' : ''}`;
-    });
-    own.append(ownLabel, ownInput);
-    host.appendChild(own);
     const KIND = { image: 'image', link: 'link', background: 'background', attribute: 'attribute', text: 'text' };
     for (const hit of (item.hits || []).slice(0, 6)) {
       const line = document.createElement('div');
@@ -2179,6 +2207,19 @@
       more.textContent = `+${item.count - item.hits.length} more in ${locale}`;
       host.appendChild(more);
     }
+  }
+
+  // A click anywhere outside Find / Across locales folds the locales panel
+  // (it comes back when the Find field gets focus). Never during a run.
+  if (!STATE.multiLocaleOutsideClickBound && typeof document !== 'undefined') {
+    STATE.multiLocaleOutsideClickBound = true;
+    document.addEventListener('pointerdown', (event) => {
+      const drawer = document.getElementById(IDS.multiLocaleDrawer);
+      if (!drawer || STATE.multiLocaleBusy || STATE.multiLocaleApplying) return;
+      const bar = document.getElementById(IDS.findBar);
+      if (drawer.contains(event.target) || bar?.contains(event.target)) return;
+      drawer.remove();
+    }, true);
   }
 
   function buildFindBar(editorPane) {
@@ -2208,6 +2249,7 @@
       resetMultiLocalePlanForQuery();
       renderMultiLocaleDrawer(true);
     });
+    find.addEventListener('focus', () => { if (find.value) renderMultiLocaleDrawer(true); });
     find.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); findNext(find.value, event.shiftKey ? -1 : 1); }
       if (event.key === 'Escape') { event.preventDefault(); closeFindBar(); }
