@@ -44,3 +44,8 @@ assert.equal(d.actual, ' style="y"');
 assert.equal(describe('same', 'same').lengthDelta, 0);
 
 console.log('✓ RetKit v0.8.5 find scope + sync diff diagnostics');
+
+// Every bulk replace leaves a persistent report with before → after snippets.
+assert.match(core, /diagIncident\('multilocale_apply_report'/, 'bulk replace report is an incident (persists across reloads)');
+assert.match(core, /function replaceSnippets\(/, 'report shows what changed around each match');
+console.log('✓ RetKit v0.8.5 bulk replace report');

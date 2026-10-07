@@ -1844,6 +1844,18 @@
     return STATE.multiLocalePlan.filter((item) => selected.has(item.locale) && item.count > 0);
   }
 
+  // What exactly changes, as the person would check it: ±50 chars around
+  // each of the first 3 matches, before → after.
+  function replaceSnippets(html, query, replacement, mode) {
+    const ra = replaceCore();
+    if (!ra) return [];
+    const scan = ra.scan(html, query, { mode, maxHits: 3, radius: 50 });
+    return scan.hits.map((hit) => {
+      const one = ra.replaceIn(hit.match, query, replacement, { mode }).value;
+      return { before: `${hit.before}[${hit.match}]${hit.after}`, after: `${hit.before}[${one}]${hit.after}` };
+    });
+  }
+
   async function applyMultiLocaleReplace() {
     if (STATE.multiLocaleBusy) return;
     const bridge = multiLocaleBridge();
@@ -1896,7 +1908,7 @@
           failed.push({ locale: item.locale, reason: write?.reason || 'write failed' });
           continue;
         }
-        applied.push({ locale: item.locale, count: result.count, expected: result.value });
+        applied.push({ locale: item.locale, count: result.count, expected: result.value, hits: replaceSnippets(currentHtml, query, own ?? replacement, mode) });
         updateMultiLocaleRowState(item.locale, `✓ ${result.count}`, 'ok');
       }
 
@@ -1922,6 +1934,15 @@
         }
       }
       const totalMatches = verified.reduce((sum, item) => sum + item.count, 0);
+      // Persistent report (survives reload): what was searched, what it
+      // became, and the first changes in every locale, before → after.
+      diagIncident('multilocale_apply_report', `Bulk replace: ${verified.length}/${items.length} locales`, {
+        find: query.slice(0, 300),
+        replacement: replacement.slice(0, 300),
+        mode,
+        locales: applied.map((a) => ({ locale: a.locale, count: a.count, checked: verified.includes(a), changes: a.hits })),
+        failed,
+      });
       if (failed.length) {
         const list = failed.map((f) => `${localeLabel(f.locale)} (${f.reason})`).join('; ');
         status(`Replaced and checked ${verified.length}/${items.length} locales. NOT done: ${list}`, 'error');
