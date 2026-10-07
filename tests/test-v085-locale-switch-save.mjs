@@ -55,3 +55,12 @@ console.log('✓ RetKit v0.8.5 slow MoEngage settle is not a rejection');
   assert.match(between(core, 'async function commitThroughFroala', 'function describeHtmlDifference'), /shouldBlockEmptyNativeCommit/, 'every writer is guarded');
   console.log('✓ RetKit v0.8.5 empty <body> never overwrites an email');
 }
+{
+  const fnSrc = between(core, 'function htmlBodyHasContent(', 'function shouldSkipNativeCommit');
+  const api = new Function(`${fnSrc}; return { shouldBlockEmptyNativeCommit };`)();
+  const full = '<html><body><table><tr><td>Olá</td></tr></table></body></html>';
+  const empty = '<html><head><style>p{}</style></head><body>\n  </body></html>';
+  assert.equal(api.shouldBlockEmptyNativeCommit({ localHtml: empty, nativeHtml: empty, previewHtml: full }), true, 'code view empty but preview has the email: blocked');
+  assert.match(core, /native_empty_body/, 'empty code view is reported');
+  console.log('✓ RetKit v0.8.5 empty code view with a full preview is never saved');
+}

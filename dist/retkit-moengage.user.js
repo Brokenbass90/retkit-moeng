@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.5
+// @version      0.8.6
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1343,12 +1343,14 @@
     return /\S/.test(stripped.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' '));
   }
 
-  function shouldBlockEmptyNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
+  function shouldBlockEmptyNativeCommit({ localHtml = '', nativeHtml = '', previewHtml = '' } = {}) {
     const local = String(localHtml ?? '').trim();
     const native = String(nativeHtml ?? '').trim();
-    if (!local) return Boolean(native);
-    // An email whose body is empty must never overwrite one that has content.
-    return !htmlBodyHasContent(local) && htmlBodyHasContent(native);
+    if (!local) return Boolean(native) || htmlBodyHasContent(previewHtml);
+    // An email whose body is empty must never overwrite one that has content —
+    // also when MoEngage's code view itself came up empty but its preview
+    // still shows the email (seen on pt_PT: <body></body> in code, full preview).
+    return !htmlBodyHasContent(local) && (htmlBodyHasContent(native) || htmlBodyHasContent(previewHtml));
   }
 
   function shouldSkipNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
@@ -1794,7 +1796,7 @@
     // Keep the author's original formatting outside the edited region so
     // MoEngage never receives a re-indented copy of the whole email.
     const nativeBefore = native.getValue?.() || '';
-    if (shouldBlockEmptyNativeCommit({ localHtml: next, nativeHtml: nativeBefore })) {
+    if (shouldBlockEmptyNativeCommit({ localHtml: next, nativeHtml: nativeBefore, previewHtml: getRenderedPreviewHtml() })) {
       return { ok: false, reason: 'Refused: the new HTML has an empty <body> and would erase the email' };
     }
     // First write for this campaign+locale: keep the untouched version so the
@@ -3144,7 +3146,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.5</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.6</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3169,7 +3171,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.5',
+        version: '0.8.6',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3551,7 +3553,7 @@
     const startedAt = Date.now();
     const next = overlay.getValue();
     const nativeHtmlBefore = native.getValue();
-    if (shouldBlockEmptyNativeCommit({ localHtml: next, nativeHtml: nativeHtmlBefore })) {
+    if (shouldBlockEmptyNativeCommit({ localHtml: next, nativeHtml: nativeHtmlBefore, previewHtml: getRenderedPreviewHtml() })) {
       STATE.dirty = false;
       STATE.pendingApply = false;
       diagBreadcrumb('sync.empty-blocked', { revision: startedRevision, nativeLength: nativeHtmlBefore.length });
@@ -3778,7 +3780,22 @@
     nextNative.refresh?.();
     STATE.overlayEditor?.refresh?.();
     scheduleWorkspaceLayoutRefresh();
-    status(`${STATE.boundLocale ? `${STATE.boundLocale} · ` : ''}loaded from MoEngage`, 'ok');
+    warnIfNativeBodyEmpty();
+    if (!STATE.nativeBodyEmpty) status(`${STATE.boundLocale ? `${STATE.boundLocale} · ` : ''}loaded from MoEngage`, 'ok');
+    return true;
+  }
+
+  // MoEngage's code view sometimes comes up with an empty <body> while the
+  // email is still there (the preview shows it). Say so loudly; saving is
+  // blocked by shouldBlockEmptyNativeCommit until the page is reloaded.
+  function warnIfNativeBodyEmpty() {
+    const native = (getNativeEditor() || STATE.nativeEditor)?.getValue?.() || '';
+    const preview = getRenderedPreviewHtml();
+    STATE.nativeBodyEmpty = Boolean(native) && !htmlBodyHasContent(native) && htmlBodyHasContent(preview);
+    if (!STATE.nativeBodyEmpty) return false;
+    const locale = STATE.boundLocale || currentBridgeLocale() || 'this locale';
+    diagIncident('native_empty_body', `MoEngage code view shows an empty <body> for ${locale}; preview still has the email`, { locale, nativeHtml: native, previewLength: preview.length });
+    status(`⚠ ${locale}: MoEngage code view came up EMPTY (preview still has the email). Nothing is saved from here — reload the page and reopen ${locale}.`, 'error');
     return true;
   }
 
@@ -4053,6 +4070,7 @@
 
     STATE.nativeEditor = native;
     STATE.boundLocale = currentBridgeLocale();
+    setTimeout(() => warnIfNativeBodyEmpty(), 600);
     STATE.previewHtml = '';
     STATE.previewPendingHtml = '';
     STATE.previewLastValidHtml = '';
@@ -4265,7 +4283,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.5 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.6 loaded');
   }
 
   boot();
@@ -6002,7 +6020,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.5',
+          clientVersion: '0.8.6',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8335,7 +8353,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.5');
+    setTextContentIfChanged(version, 'v0.8.6');
     return true;
   }
 
@@ -11220,7 +11238,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.5' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.6' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -11246,7 +11264,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.5 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.6 loaded');
   }
 
   bootBridge();
