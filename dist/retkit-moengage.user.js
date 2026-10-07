@@ -2401,8 +2401,10 @@
           .filter((item) => selectedLocales.has(item.locale))
           .reduce((sum, item) => sum + Number(item.count || 0), 0);
         apply.disabled = STATE.multiLocaleBusy || selected.length === 0 || selectedMatches === 0;
+        const topValue = String(document.getElementById(IDS.replaceInput)?.value || '');
+        const shown = topValue === '' ? 'nothing (DELETE)' : `“${topValue.length > 30 ? `${topValue.slice(0, 30)}…` : topValue}”`;
         apply.textContent = selected.length
-          ? `Replace ${selectedMatches} match${selectedMatches === 1 ? '' : 'es'} in ${selected.length} locale${selected.length === 1 ? '' : 's'}`
+          ? `Replace ${selectedMatches} match${selectedMatches === 1 ? '' : 'es'} in ${selected.length} locale${selected.length === 1 ? '' : 's'} with ${shown}`
           : 'Replace across locales';
       }
     };
@@ -2595,7 +2597,9 @@
   }
 
   async function applyMultiLocaleReplace() {
-    if (STATE.multiLocaleBusy) return;
+    // Taken at the very first line: a second click while this run is starting
+    // (or running) does nothing.
+    if (STATE.multiLocaleBusy || STATE.multiLocaleApplying) return;
     const bridge = multiLocaleBridge();
     if (!bridge?.setLocaleHtmlStable || !bridge?.readLocaleHtmlFast) {
       status('Stable locale writer is unavailable', 'error');
@@ -2611,6 +2615,30 @@
       status('Select at least one locale with matches', 'warn');
       return;
     }
+    // An empty replacement DELETES the found text. Never by accident.
+    const valueFor = (locale) => (Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, locale) ? String(STATE.multiLocaleOverrides[locale]) : replacement);
+    const deleting = items.filter((item) => valueFor(item.locale) === '');
+    if (deleting.length) {
+      const names = deleting.map((item) => localeLabel(item.locale)).join(', ');
+      const sure = root.confirm?.(`The “Replace with…” field is EMPTY for: ${names}.\n\n“${query}” will be DELETED there, not replaced.\n\nDelete it?`);
+      if (!sure) { status('Nothing changed: the replacement is empty', 'warn'); return; }
+    }
+    STATE.multiLocaleApplying = true;
+    const applyButton = document.querySelector('[data-rk-multilocale-apply]');
+    if (applyButton) { applyButton.disabled = true; applyButton.textContent = `Replacing in ${items.length} locales… keep this tab open`; }
+    status(`Replacing “${query}” in ${items.length} locales…`, 'neutral');
+    try {
+      await applyMultiLocaleReplaceRun({ bridge, query, replacement, mode, items });
+    } finally {
+      STATE.multiLocaleApplying = false;
+      // The result belongs to this run only: the next run needs a new search,
+      // so a second click can never repeat the replace by accident.
+      resetMultiLocalePlanForQuery(true);
+      renderMultiLocalePlanRows();
+    }
+  }
+
+  async function applyMultiLocaleReplaceRun({ bridge, query, replacement, mode, items }) {
     const origin = String(await Promise.resolve(bridge.getActiveLocale?.() || ''));
     const flush = await flushBeforeLocaleSwitch();
     STATE.localeSwitchUntil = 0;
@@ -2854,11 +2882,11 @@
     own.className = 'rk-ml-own';
     const ownLabel = document.createElement('span');
     ownLabel.className = 'rk-ml-kind';
-    ownLabel.textContent = `${localeLabel(locale)}: replace with`;
+    ownLabel.textContent = `Only ${localeLabel(locale)}, a different value (optional)`;
     const ownInput = document.createElement('input');
     ownInput.className = 'rk-find-input';
     ownInput.dataset.rkLocaleOverride = locale;
-    ownInput.placeholder = 'empty = same as “Replace with…” above';
+    ownInput.placeholder = 'leave empty — uses “Replace with…” at the top';
     ownInput.autocomplete = 'off';
     ownInput.value = Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, locale) ? STATE.multiLocaleOverrides[locale] : '';
     ownInput.addEventListener('input', () => {
@@ -2922,6 +2950,8 @@
       if (event.key === 'Enter') { event.preventDefault(); findNext(find.value, event.shiftKey ? -1 : 1); }
       if (event.key === 'Escape') { event.preventDefault(); closeFindBar(); }
     });
+    // The bulk button always says what it will write (or that it deletes).
+    replace.addEventListener('input', () => { if (STATE.multiLocalePlan.length) renderMultiLocalePlanRows(); });
     replace.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); replaceCurrent(); }
       if (event.key === 'Escape') closeFindBar();

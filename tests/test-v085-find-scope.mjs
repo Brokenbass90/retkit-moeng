@@ -49,3 +49,12 @@ console.log('✓ RetKit v0.8.5 find scope + sync diff diagnostics');
 assert.match(core, /diagIncident\('multilocale_apply_report'/, 'bulk replace report is an incident (persists across reloads)');
 assert.match(core, /function replaceSnippets\(/, 'report shows what changed around each match');
 console.log('✓ RetKit v0.8.5 bulk replace report');
+
+// v0.8.5 safety after the "aff=764878 deleted" incident.
+const applyAll = slice('async function applyMultiLocaleReplace()', 'async function applyMultiLocaleReplaceRun');
+assert.match(applyAll, /STATE\.multiLocaleApplying = true/, 'busy is taken before the first await (no double run)');
+assert.ok(applyAll.indexOf('STATE.multiLocaleApplying = true') < applyAll.indexOf('await '), 'lock precedes any await');
+assert.match(applyAll, /=== ''[\s\S]*root\.confirm/, 'an empty replacement asks before deleting');
+assert.match(applyAll, /resetMultiLocalePlanForQuery\(true\)/, 'a finished run needs a new search before another replace');
+assert.match(core, /with \$\{shown\}/, 'the button shows the replacement value or DELETE');
+console.log('✓ RetKit v0.8.5 bulk replace: no double run, no silent delete');
