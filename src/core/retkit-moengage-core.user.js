@@ -1063,7 +1063,7 @@
     }
     // First write for this campaign+locale: keep the untouched version so the
     // user can return to it (see src/backup/original-snapshots.js).
-    try { root.__RetKitOriginals?.captureBeforeCommit?.(nativeBefore, { locale: options.locale }); } catch {}
+    try { root.__RetKitOriginals?.captureBeforeCommit?.(nativeBefore, { locale: options.locale || STATE.boundLocale || undefined }); } catch {}
     const exactOriginal = root.__RetKitOriginals?.takeExactRestore?.(next, htmlEquivalentForSync);
     next = exactOriginal ?? preserveSourceWhitespace(nativeBefore, next);
     native.focus?.();

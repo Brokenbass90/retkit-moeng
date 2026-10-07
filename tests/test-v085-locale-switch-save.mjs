@@ -64,3 +64,18 @@ console.log('✓ RetKit v0.8.5 slow MoEngage settle is not a rejection');
   assert.match(core, /native_empty_body/, 'empty code view is reported');
   console.log('✓ RetKit v0.8.5 empty code view with a full preview is never saved');
 }
+{
+  // An empty skeleton never becomes "the original", and is never restorable.
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  require('../src/backup/original-snapshots.js');
+  const O = globalThis.__RetKitOriginals;
+  const store = O.createStore({ backend: O.memoryBackend() });
+  const skeleton = '<!DOCTYPE html><html><head><style>p{}</style></head><body>\n</body></html>';
+  const real = '<html><body><table><tr><td>Olá</td></tr></table></body></html>';
+  assert.equal((await store.captureIfMissing({ campaign: 'c', locale: 'PT_PT', html: skeleton })).captured, false, 'empty body is not captured');
+  assert.equal((await store.captureIfMissing({ campaign: 'c', locale: 'PT_PT', html: real })).captured, true, 'real email is captured');
+  assert.match(bridge, /Saved original is EMPTY — cannot restore/, 'old empty snapshots cannot be restored');
+  assert.match(bridge, /diagIncident\?\.\('original_restored'/, 'every restore is logged persistently');
+  console.log('✓ RetKit v0.8.6 Original never stores or restores an empty email');
+}

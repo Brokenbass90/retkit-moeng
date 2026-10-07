@@ -1801,7 +1801,7 @@
     }
     // First write for this campaign+locale: keep the untouched version so the
     // user can return to it (see src/backup/original-snapshots.js).
-    try { root.__RetKitOriginals?.captureBeforeCommit?.(nativeBefore, { locale: options.locale }); } catch {}
+    try { root.__RetKitOriginals?.captureBeforeCommit?.(nativeBefore, { locale: options.locale || STATE.boundLocale || undefined }); } catch {}
     const exactOriginal = root.__RetKitOriginals?.takeExactRestore?.(next, htmlEquivalentForSync);
     next = exactOriginal ?? preserveSourceWhitespace(nativeBefore, next);
     native.focus?.();
@@ -5785,6 +5785,18 @@ module.exports = { isRtlLocale, applyRtl };
     };
   }
 
+  // A real email has something in <body>. MoEngage sometimes shows an empty
+  // skeleton (<head><style> + empty <body>); that must never become "the
+  // original" — restoring it erased pt_PT.
+  function hasBodyContent(html) {
+    const source = String(html ?? '');
+    const match = source.match(/<body\b[^>]*>([\s\S]*?)(?:<\/body>|$)/i);
+    const body = match ? match[1] : (/<html\b/i.test(source) ? '' : source);
+    const stripped = body.replace(/<!--[\s\S]*?-->/g, '').replace(/<(?:script|style)\b[\s\S]*?<\/(?:script|style)>/gi, '');
+    if (/<(?:img|table|a|p|div|td|span|center|h[1-6])\b/i.test(stripped)) return true;
+    return /\S/.test(stripped.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' '));
+  }
+
   function createStore(options = {}) {
     const backend = options.backend || indexedDbBackend(options.indexedDB) || memoryBackend();
     const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
@@ -5795,12 +5807,13 @@ module.exports = { isRtlLocale, applyRtl };
     // Keep only the first version: an existing snapshot is never overwritten.
     async function captureIfMissing({ campaign, locale, html }) {
       const value = String(html ?? '');
-      if (!campaign || !value.trim()) return { captured: false, reason: 'empty' };
+      if (!campaign || !value.trim() || !hasBodyContent(value)) return { captured: false, reason: 'empty' };
       const key = snapshotKey(campaign, locale);
       if (pendingCaptures.has(key)) return pendingCaptures.get(key);
       const job = (async () => {
         const existing = await backend.get(key);
-        if (existing) {
+        // An empty snapshot from earlier versions is replaced by a real one.
+        if (existing && hasBodyContent(existing.html)) {
           existing.lastSeenAt = now();
           await backend.put(existing);
           return { captured: false, reason: 'exists', entry: existing };
@@ -5846,7 +5859,7 @@ module.exports = { isRtlLocale, applyRtl };
   }
 
   const api = {
-    DEFAULT_LIMITS, campaignKeyFromUrl, snapshotKey, planPrune, createStore, memoryBackend,
+    DEFAULT_LIMITS, campaignKeyFromUrl, snapshotKey, planPrune, createStore, memoryBackend, hasBodyContent,
     store: null,
     // Set by the MoEngage bridge: returns { campaign, locale } for the open email.
     contextProvider: null,
@@ -11189,7 +11202,12 @@ module.exports = { isRtlLocale, applyRtl };
     restore.type = 'button';
     restore.className = 'rk-v050-primary';
     restore.textContent = 'Restore original';
-    restore.disabled = same || !editor;
+    const emptySnapshot = typeof api.hasBodyContent === 'function' && !api.hasBodyContent(entry.html);
+    restore.disabled = same || !editor || emptySnapshot;
+    if (emptySnapshot) {
+      restore.textContent = 'Saved original is EMPTY — cannot restore';
+      restore.title = 'MoEngage handed RetKit an empty email when this was saved. Restoring it would erase the email.';
+    }
     restore.addEventListener('click', () => {
       if (restore.dataset.armed !== '1') {
         restore.dataset.armed = '1';
@@ -11207,6 +11225,7 @@ module.exports = { isRtlLocale, applyRtl };
       // An undoable edit: Cmd/Ctrl+Z in the editor brings the newer version back.
       editor.replaceRange(text, { line: editor.firstLine?.() ?? 0, ch: 0 }, { line: last, ch: (editor.getLine(last) || '').length }, '+retkit-restore-original');
       diagBreadcrumb?.('original.restore', { locale: entry.locale, bytes: entry.bytes });
+      diagIncident?.('original_restored', `Original restored for ${entry.locale}`, { locale: entry.locale, bytes: entry.bytes, capturedAt: entry.capturedAt, html: entry.html });
       workspaceStatus(`Restoring original ${entry.locale}… (Cmd/Ctrl+Z undoes it)`, 'neutral');
       pop.remove();
     });

@@ -101,6 +101,18 @@
     };
   }
 
+  // A real email has something in <body>. MoEngage sometimes shows an empty
+  // skeleton (<head><style> + empty <body>); that must never become "the
+  // original" — restoring it erased pt_PT.
+  function hasBodyContent(html) {
+    const source = String(html ?? '');
+    const match = source.match(/<body\b[^>]*>([\s\S]*?)(?:<\/body>|$)/i);
+    const body = match ? match[1] : (/<html\b/i.test(source) ? '' : source);
+    const stripped = body.replace(/<!--[\s\S]*?-->/g, '').replace(/<(?:script|style)\b[\s\S]*?<\/(?:script|style)>/gi, '');
+    if (/<(?:img|table|a|p|div|td|span|center|h[1-6])\b/i.test(stripped)) return true;
+    return /\S/.test(stripped.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' '));
+  }
+
   function createStore(options = {}) {
     const backend = options.backend || indexedDbBackend(options.indexedDB) || memoryBackend();
     const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
@@ -111,12 +123,13 @@
     // Keep only the first version: an existing snapshot is never overwritten.
     async function captureIfMissing({ campaign, locale, html }) {
       const value = String(html ?? '');
-      if (!campaign || !value.trim()) return { captured: false, reason: 'empty' };
+      if (!campaign || !value.trim() || !hasBodyContent(value)) return { captured: false, reason: 'empty' };
       const key = snapshotKey(campaign, locale);
       if (pendingCaptures.has(key)) return pendingCaptures.get(key);
       const job = (async () => {
         const existing = await backend.get(key);
-        if (existing) {
+        // An empty snapshot from earlier versions is replaced by a real one.
+        if (existing && hasBodyContent(existing.html)) {
           existing.lastSeenAt = now();
           await backend.put(existing);
           return { captured: false, reason: 'exists', entry: existing };
@@ -162,7 +175,7 @@
   }
 
   const api = {
-    DEFAULT_LIMITS, campaignKeyFromUrl, snapshotKey, planPrune, createStore, memoryBackend,
+    DEFAULT_LIMITS, campaignKeyFromUrl, snapshotKey, planPrune, createStore, memoryBackend, hasBodyContent,
     store: null,
     // Set by the MoEngage bridge: returns { campaign, locale } for the open email.
     contextProvider: null,

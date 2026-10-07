@@ -3856,7 +3856,12 @@
     restore.type = 'button';
     restore.className = 'rk-v050-primary';
     restore.textContent = 'Restore original';
-    restore.disabled = same || !editor;
+    const emptySnapshot = typeof api.hasBodyContent === 'function' && !api.hasBodyContent(entry.html);
+    restore.disabled = same || !editor || emptySnapshot;
+    if (emptySnapshot) {
+      restore.textContent = 'Saved original is EMPTY — cannot restore';
+      restore.title = 'MoEngage handed RetKit an empty email when this was saved. Restoring it would erase the email.';
+    }
     restore.addEventListener('click', () => {
       if (restore.dataset.armed !== '1') {
         restore.dataset.armed = '1';
@@ -3874,6 +3879,7 @@
       // An undoable edit: Cmd/Ctrl+Z in the editor brings the newer version back.
       editor.replaceRange(text, { line: editor.firstLine?.() ?? 0, ch: 0 }, { line: last, ch: (editor.getLine(last) || '').length }, '+retkit-restore-original');
       diagBreadcrumb?.('original.restore', { locale: entry.locale, bytes: entry.bytes });
+      diagIncident?.('original_restored', `Original restored for ${entry.locale}`, { locale: entry.locale, bytes: entry.bytes, capturedAt: entry.capturedAt, html: entry.html });
       workspaceStatus(`Restoring original ${entry.locale}… (Cmd/Ctrl+Z undoes it)`, 'neutral');
       pop.remove();
     });
