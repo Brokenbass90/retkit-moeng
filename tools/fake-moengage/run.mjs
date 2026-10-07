@@ -1,5 +1,3 @@
-// Setup once in this folder: npm i codemirror@5 playwright-core (needs a Chromium; set the path below).
-// Scenarios: read | replace | dirty | spelling ; last arg = MoEngage tab->content delay in ms.
 // Fake-MoEngage harness for RetKit multi-locale find/replace.
 // usage: node run.mjs <dist.user.js> <base.html> [scenario] [swapDelay]
 import fs from 'node:fs';
