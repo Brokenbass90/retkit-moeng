@@ -42,6 +42,44 @@
       .sort((a, b) => b.needle.length - a.needle.length);
   }
 
+  // Text mode is "what a person sees": the same text matches however the
+  // HTML spells it — & / &amp;, ' / &#39; / &apos;, " / &quot;, a space /
+  // &nbsp; / a line break with indentation (code view re-wraps long text).
+  const SPACE_RE = '(?:[\\s\\u00a0]|&nbsp;|&#160;|&#xa0;)+';
+  const CHAR_RE = {
+    '&': '(?:&amp;|&)',
+    "'": "(?:'|&#39;|&#x27;|&apos;)",
+    '"': '(?:"|&quot;|&#34;|&#x22;)',
+  };
+  function decodeQuery(text) {
+    return String(text)
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
+      .replace(/&#39;|&#x27;|&apos;/gi, "'")
+      .replace(/&quot;|&#34;|&#x22;/gi, '"')
+      .replace(/&amp;/gi, '&');
+  }
+  function textPattern(find) {
+    const plain = decodeQuery(find);
+    if (!plain.trim()) return escapeRegExp(find);
+    let out = '';
+    for (const part of plain.split(/([\s\u00a0]+)/)) {
+      if (!part) continue;
+      if (/^[\s\u00a0]+$/.test(part)) { out += SPACE_RE; continue; }
+      for (const ch of part) out += CHAR_RE[ch] || escapeRegExp(ch);
+    }
+    return out;
+  }
+  // The replacement is written in the same spelling as the text it replaces.
+  function encoderFor(hit) {
+    const steps = [];
+    if (/&amp;/i.test(hit)) steps.push(encodeAmp);
+    else if (/&(?!(?:amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-f]+);)/i.test(hit)) steps.push(decodeAmp);
+    const apos = (hit.match(/&#39;|&#x27;|&apos;/i) || [])[0];
+    if (apos) steps.push((r) => r.replace(/'/g, apos));
+    if (/&quot;/i.test(hit)) steps.push((r) => r.replace(/"/g, '&quot;'));
+    return (r) => steps.reduce((value, step) => step(value), String(r));
+  }
+
   // Returns { re, encodeFor(hit) } or null.
   function compile(find, mode = 'text') {
     if (mode === 'filename') {
@@ -50,10 +88,9 @@
       const re = new RegExp(`(?:https?:)?//[^\\s"'()<>]*?/${escapeRegExp(name)}(?:[?#][^\\s"'()<>]*)?(?=[\\s"'()<>]|$)`, 'gi');
       return { re, encodeFor: (hit) => (/&amp;/i.test(hit) ? encodeAmp : (r) => r) };
     }
-    const vs = variants(find);
-    if (!vs.length) return null;
-    const byNeedle = new Map(vs.map((v) => [v.needle, v.encode]));
-    return { re: new RegExp(vs.map((v) => escapeRegExp(v.needle)).join('|'), 'g'), encodeFor: (hit) => byNeedle.get(hit) || ((r) => r) };
+    const needle = String(find || '');
+    if (!needle) return null;
+    return { re: new RegExp(textPattern(needle), 'g'), encodeFor: encoderFor };
   }
 
   function kindAt(text, index) {

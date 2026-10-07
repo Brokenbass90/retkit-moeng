@@ -2109,6 +2109,41 @@
     return findWithin(document);
   }
 
+  let lastLocaleSwitch = null;
+
+  // Wait until the native editor really shows `wanted` (not just the tab):
+  // the editor changed since the click that selected it, and is stable.
+  async function waitForLocaleContent(wanted, options = {}) {
+    const timeoutMs = Number(options.timeoutMs) || 6000;
+    const unchangedAfterMs = Number(options.unchangedAfterMs) || 2500;
+    const pending = lastLocaleSwitch && lastLocaleSwitch.locale === wanted && !lastLocaleSwitch.settled ? lastLocaleSwitch : null;
+    const baseEditor = pending ? pending.beforeEditor : null;
+    const baseHtml = pending ? pending.beforeHtml : null;
+    const started = pending ? pending.at : Date.now();
+    let lastEditor = null;
+    let lastHtml = null;
+    let stableSince = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const native = getNativeEditorOutsideWorkspace();
+      const html = String(native?.getValue?.() || '');
+      const selected = getNativeSelectedLocale();
+      const tabOk = !selected || selected === wanted;
+      const changed = !pending || (Boolean(native) && (native !== baseEditor || html !== baseHtml));
+      if (native !== lastEditor || html !== lastHtml) { lastEditor = native; lastHtml = html; stableSince = Date.now(); }
+      const stableMs = Date.now() - stableSince;
+      if (html && tabOk && changed && stableMs >= 300) {
+        if (pending) pending.settled = true;
+        return { html, confirmed: true, locale: wanted };
+      }
+      if (html && tabOk && !changed && Date.now() - started >= unchangedAfterMs && stableMs >= 300) {
+        if (pending) pending.settled = true;
+        return { html, confirmed: false, locale: wanted, reason: 'same HTML as the previous locale' };
+      }
+      await wait(60);
+    }
+    throw new Error(`MoEngage did not show ${wanted} in time`);
+  }
+
   async function switchNativeLocale(target, options = {}) {
     const locale = displayLocale(target);
     if (!locale) return { ok: false, reason: 'Locale is empty' };
@@ -2119,6 +2154,12 @@
       return { ok: true, reason: 'Already active' };
     }
 
+    // Remember what the editor showed before the click: the switch is only
+    // finished when the editor stops showing this (see waitForLocaleContent).
+    {
+      const beforeEditor = getNativeEditorOutsideWorkspace();
+      lastLocaleSwitch = { locale, beforeEditor, beforeHtml: String(beforeEditor?.getValue?.() || ''), at: Date.now(), settled: false };
+    }
     const direct = findDirectLocaleControl(locale);
     if (direct?.type === 'select') setNativeSelect(direct.control, direct.option);
     else if (direct?.type === 'click') direct.control.click();
@@ -2142,32 +2183,32 @@
     return { ok: true, reason: '' };
   }
 
-  async function readNativeLocaleHtmlFast(locale) {
+  // Switch MoEngage to a locale and return ITS html. MoEngage highlights the
+  // tab first and swaps the editor content later; templates also keep the
+  // same <html lang> in every locale. So neither the tab nor lang proves the
+  // content is the new locale's: wait until the editor itself changed (new
+  // instance or new value) and stayed stable. Returns { html, confirmed }.
+  async function readNativeLocaleHtmlSettled(locale, options = {}) {
     const wanted = displayLocale(locale);
-    if (!wanted) return '';
-    const beforeEditor = getNativeEditorOutsideWorkspace();
-    const beforeHtml = String(beforeEditor?.getValue?.() || '');
-    const switched = await switchNativeLocale(wanted, { rebind: false, preferNative: true, timeoutMs: 2400 });
+    if (!wanted) throw new Error('Locale is empty');
+    const switched = await switchNativeLocale(wanted, { rebind: false, preferNative: true, timeoutMs: 4000 });
     if (!switched?.ok) throw new Error(switched?.reason || `Could not switch to ${wanted}`);
-    const started = Date.now();
-    while (Date.now() - started < 1400) {
-      const native = getNativeEditorOutsideWorkspace();
-      const html = String(native?.getValue?.() || '');
-      const nativeLocale = displayLocale(localeFromHtml(html));
-      const selected = getNativeSelectedLocale();
-      const changedEditor = Boolean(native && native !== beforeEditor);
-      const changedHtml = Boolean(html && html !== beforeHtml);
-      const settledSelection = selected === wanted && Date.now() - started >= 160;
-      if (html && (nativeLocale === wanted || changedEditor || changedHtml || settledSelection)) return html;
-      await wait(60);
-    }
-    throw new Error(`Native HTML for ${wanted} was not ready`);
+    return waitForLocaleContent(wanted, options);
+  }
+
+  async function readNativeLocaleHtmlFast(locale) {
+    const result = await readNativeLocaleHtmlSettled(locale);
+    return result.html;
   }
 
   async function rebindWorkspaceAfterLocaleChange(targetLocale = '') {
     const base = root.__RetKitMoEngageCore;
     if (!document.getElementById(IDS.workspace) || !base?.rebindNativeEditorFromMoEngage) return false;
     const wanted = displayLocale(targetLocale);
+    // Bind RetKit only to the editor that really shows the new locale —
+    // binding to the previous locale's editor is how one locale's HTML got
+    // shown (and then saved) under another locale's tab.
+    try { await waitForLocaleContent(wanted, { timeoutMs: 8000 }); } catch {}
 
     for (const delay of [60, 120, 220, 360, 600, 900, 1400]) {
       await wait(delay);
@@ -3636,25 +3677,29 @@
   async function setNativeLocaleHtmlStable(locale, html, options = {}) {
     const wanted = displayLocale(locale);
     if (!wanted) return { ok: false, locale: wanted, reason: 'Locale is empty' };
-    const switched = await switchNativeLocale(wanted, { rebind: false, preferNative: true, timeoutMs: 2400 });
-    if (!switched?.ok) return { ok: false, locale: wanted, reason: switched?.reason || `Could not switch to ${wanted}` };
-    const native = getNativeEditorOutsideWorkspace();
-    if (!native) return { ok: false, locale: wanted, reason: `Native editor for ${wanted} was not found` };
+    let current;
+    try { current = await readNativeLocaleHtmlSettled(wanted); } catch (error) {
+      return { ok: false, locale: wanted, reason: error?.message || String(error) };
+    }
+    const equivalent = root.__RetKitMoEngageCore?.htmlEquivalentForSync;
+    const same = (a, b) => (typeof equivalent === 'function' ? equivalent(a, b) : a === b);
+    // Never write on top of something other than what the replacement was
+    // computed from: that is how one locale's HTML ends up in another.
+    if (Object.prototype.hasOwnProperty.call(options, 'expectedBefore') && !same(current.html, String(options.expectedBefore ?? ''))) {
+      return { ok: false, locale: wanted, reason: `${wanted}: the editor does not show the HTML that was read for this locale — not written` };
+    }
     const commit = root.__RetKitMoEngageCore?.commitNativeHtml;
     if (typeof commit !== 'function') return { ok: false, locale: wanted, reason: 'Native commit helper is unavailable' };
     const next = String(html ?? '');
-    // commitThroughFroala(fast:false) already performs two persistence checks
-    // after the React/Froala render cycle. Do not pay a second fixed 700ms
-    // settle delay here for every locale.
     const result = await Promise.resolve(commit(next, { fast: false, locale: wanted }));
     const actual = String(getNativeEditorOutsideWorkspace()?.getValue?.() || '');
-    const equivalent = root.__RetKitMoEngageCore?.htmlEquivalentForSync;
-    const persisted = Boolean(result?.ok) && (typeof equivalent === 'function' ? equivalent(actual, next) : actual === next);
+    const stillThere = getNativeSelectedLocale() ? getNativeSelectedLocale() === wanted : true;
+    const persisted = Boolean(result?.ok) && stillThere && same(actual, next);
     return {
       ok: persisted,
       locale: wanted,
       persisted,
-      reason: persisted ? '' : (result?.reason || `${wanted}: MoEngage reverted the HTML after the stable commit`),
+      reason: persisted ? '' : (result?.reason || `${wanted}: MoEngage did not keep the HTML`),
     };
   }
 
@@ -3696,6 +3741,7 @@
     removeLocale: (locale) => removeNativeLocale(locale),
     switchLocale: (locale, options) => switchNativeLocale(locale, options || {}).then((result) => Boolean(result?.ok)),
     readLocaleHtmlFast: (locale) => readNativeLocaleHtmlFast(locale),
+    readLocaleHtmlSettled: (locale, options) => readNativeLocaleHtmlSettled(locale, options || {}),
     setLocaleHtml: (locale, html, options) => setNativeLocaleHtml(locale, html, options),
     setLocaleHtmlFast: (locale, html, options) => setNativeLocaleHtmlFast(locale, html, options),
     setLocaleHtmlStable: (locale, html, options) => setNativeLocaleHtmlStable(locale, html, options),

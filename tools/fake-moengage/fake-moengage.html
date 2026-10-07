@@ -1,0 +1,73 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Fake MoEngage</title>
+<style>/*CMCSS*/ .CodeMirror{height:300px;border:1px solid #ccc} li.mds-tabs__item--active a{font-weight:bold}</style>
+<script>/*CMJS*/</script>
+</head><body>
+<div class="flow-page">
+  <div class="mds-tabs__header mds-tabs__header--line"><div><ul class="mds-tabs__list mds-tabs__chips__list" id="tabs"></ul></div></div>
+  <div class="fr-box" id="frbox">
+    <div class="fr-toolbar"><button type="button" data-cmd="html" id="codeBtn" aria-pressed="true" class="fr-active">Code View</button></div>
+    <iframe class="fr-iframe" id="visual"></iframe>
+    <div id="cmHost"></div>
+  </div>
+  <iframe id="sidePreview"></iframe>
+</div>
+<script>
+// Simulated MoEngage: per-locale store, tab click highlights at once but the
+// editor content is swapped (CodeMirror remounted) only after SWAP_DELAY ms.
+const CFG = Object.assign({ swapDelay: 450, storeOnChangeDelay: 200 }, window.__FAKE_CFG || {});
+const store = window.__FAKE_STORE; // { 'Default': html, 'ar_KW': html, ... }
+const order = Object.keys(store);
+let active = order[0];
+let cm = null;
+let changeTimer = null;
+window.__fakeLog = [];
+function mountEditor(locale) {
+  const host = document.getElementById('cmHost');
+  host.innerHTML = '';
+  cm = CodeMirror(host, { value: store[locale], mode: 'htmlmixed', lineNumbers: true });
+  const bound = locale;
+  cm.on('change', () => {
+    clearTimeout(changeTimer);
+    const value = cm.getValue();
+    changeTimer = setTimeout(() => { if (active === bound) { store[bound] = value; window.__fakeLog.push(['store-change', bound, value.length]); } }, CFG.storeOnChangeDelay);
+  });
+  document.getElementById('sidePreview').setAttribute('srcdoc', store[locale]);
+}
+function renderTabs() {
+  const ul = document.getElementById('tabs');
+  ul.innerHTML = '';
+  for (const locale of order) {
+    const li = document.createElement('li');
+    li.className = 'mds-tabs__item' + (locale === active ? ' mds-tabs__item--active' : '');
+    const a = document.createElement('a');
+    a.href = '#';
+    a.textContent = locale;
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (locale === active) return;
+      // the edit in the leaving locale is flushed by React on switch only if
+      // its debounce already fired; otherwise it is lost (realistic race).
+      clearTimeout(changeTimer);
+      active = locale;
+      renderTabs();
+      window.__fakeLog.push(['tab', locale]);
+      setTimeout(() => { if (active === locale) mountEditor(locale); }, CFG.swapDelay);
+    });
+    li.appendChild(a);
+    ul.appendChild(li);
+  }
+}
+document.getElementById('codeBtn').addEventListener('click', () => {
+  const btn = document.getElementById('codeBtn');
+  const on = btn.getAttribute('aria-pressed') === 'true';
+  if (on) { store[active] = cm.getValue(); window.__fakeLog.push(['store-codeview', active, store[active].length]); }
+  btn.setAttribute('aria-pressed', on ? 'false' : 'true');
+  btn.classList.toggle('fr-active', !on);
+  if (!on) { cm.setValue(store[active]); }
+  document.getElementById('sidePreview').setAttribute('srcdoc', store[active]);
+});
+renderTabs();
+mountEditor(active);
+</script>
+</body></html>

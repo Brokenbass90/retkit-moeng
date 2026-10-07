@@ -2422,6 +2422,20 @@
     if (row) row.dataset.state = state;
   }
 
+  // One locale's HTML, read only after MoEngage really shows that locale.
+  // If it looks identical to the locale read just before, look again after a
+  // pause: identical locales are fine, a late swap is not.
+  async function readLocaleForWalk(bridge, locale, previousHtml) {
+    if (!bridge.readLocaleHtmlSettled) return { html: String(await Promise.resolve(bridge.readLocaleHtmlFast(locale)) || ''), confirmed: true };
+    let read = await Promise.resolve(bridge.readLocaleHtmlSettled(locale));
+    if (!read.confirmed && previousHtml != null && read.html === previousHtml) {
+      await sleep(1500);
+      const again = await Promise.resolve(bridge.readLocaleHtmlSettled(locale, { unchangedAfterMs: 600 }));
+      read = { ...again, confirmed: again.confirmed, identicalToPrevious: again.html === previousHtml };
+    }
+    return read;
+  }
+
   async function scanMultiLocaleReplace() {
     if (STATE.multiLocaleBusy) { STATE.multiLocaleRescanPending = true; return; }
     const bridge = multiLocaleBridge();
@@ -2463,6 +2477,10 @@
       if (!locales.length) throw new Error('No known MoEngage locales are available. Retry the scan below.');
 
       try { origin = String(await Promise.resolve(bridge.getActiveLocale?.() || '')); } catch {}
+      // The open locale's unsaved edit goes to MoEngage before we walk away.
+      const flush = await flushBeforeLocaleSwitch();
+      STATE.localeSwitchUntil = 0;
+      if (!flush.ok) throw new Error(flush.reason);
       setMultiLocaleLoading(`Scanning locales 0/${locales.length}…`);
       status(`Scanning ${locales.length} locales…`, 'neutral');
       diagBreadcrumb('multilocale.scan.start', { localeCount: locales.length, mode: 'native-fast' });
@@ -2470,7 +2488,9 @@
       for (let index = 0; index < locales.length; index += 1) {
         const locale = locales[index];
         setMultiLocaleLoading(`Scanning locales ${index + 1}/${locales.length}…`);
-        htmlByLocale[locale] = String(await Promise.resolve(bridge.readLocaleHtmlFast(locale)) || '');
+        const previous = index > 0 ? htmlByLocale[locales[index - 1]] : null;
+        const read = await readLocaleForWalk(bridge, locale, previous);
+        htmlByLocale[locale] = String(read.html || '');
       }
       if (String(document.getElementById(IDS.findInput)?.value || '') !== query) {
         // The query changed mid-walk: this result is stale, wait for the button.
@@ -2580,8 +2600,13 @@
       return;
     }
     const origin = String(await Promise.resolve(bridge.getActiveLocale?.() || ''));
+    const flush = await flushBeforeLocaleSwitch();
+    STATE.localeSwitchUntil = 0;
+    if (!flush.ok) { status(flush.reason, 'error'); return; }
     const viewState = captureEditorViewState();
     const applied = [];
+    const failed = [];
+    let previousHtml = null;
     setMultiLocaleBusy(true, `Replacing locales 0/${items.length}…`);
     diagBreadcrumb('multilocale.apply.start', { locales: items.map((item) => item.locale), queryLength: query.length, mode: 'native-hidden-stable' });
     try {
@@ -2591,26 +2616,58 @@
         const item = items[index];
         setMultiLocaleLoading(`Replacing locales ${index + 1}/${items.length}…`);
         updateMultiLocaleRowState(item.locale, `reading ${index + 1}/${items.length}…`);
-        const currentHtml = String(await Promise.resolve(bridge.readLocaleHtmlFast(item.locale)) || '');
+        const read = await readLocaleForWalk(bridge, item.locale, previousHtml);
+        const currentHtml = String(read.html || '');
+        previousHtml = currentHtml;
         const own = Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale)
           ? String(STATE.multiLocaleOverrides[item.locale]) : null;
         const result = smartReplace(currentHtml, query, own ?? replacement, mode);
         if (!result.count) {
-          updateMultiLocaleRowState(item.locale, 'no current matches', 'warn');
+          updateMultiLocaleRowState(item.locale, 'not found now', 'error');
+          failed.push({ locale: item.locale, reason: 'no matches when writing' });
           continue;
         }
         updateMultiLocaleRowState(item.locale, `writing ${result.count}…`);
-        const write = await Promise.resolve(bridge.setLocaleHtmlStable(item.locale, result.value));
+        const write = await Promise.resolve(bridge.setLocaleHtmlStable(item.locale, result.value, { expectedBefore: currentHtml }));
         if (!write?.ok) {
-          updateMultiLocaleRowState(item.locale, 'write failed', 'error');
-          throw new Error(write?.reason || `${item.locale}: native write failed`);
+          updateMultiLocaleRowState(item.locale, 'NOT written', 'error');
+          failed.push({ locale: item.locale, reason: write?.reason || 'write failed' });
+          continue;
         }
-        applied.push({ locale: item.locale, count: result.count });
+        applied.push({ locale: item.locale, count: result.count, expected: result.value });
         updateMultiLocaleRowState(item.locale, `✓ ${result.count}`, 'ok');
       }
-        const totalMatches = applied.reduce((sum, item) => sum + item.count, 0);
-      status(`Replaced ${totalMatches} matches in ${applied.length} locales · ↶ Original keeps each locale's first version`, applied.length ? 'ok' : 'warn');
-      diagBreadcrumb('multilocale.apply.done', { localeCount: applied.length, totalMatches, mode: 'native-hidden-stable' });
+
+      // Proof pass: read every written locale back from MoEngage and check it
+      // holds exactly what was written (no old matches left, nothing else lost).
+      const verified = [];
+      const equivalent = (a, b) => htmlEquivalentForSync(a, b);
+      previousHtml = null;
+      for (let index = 0; index < applied.length; index += 1) {
+        const item = applied[index];
+        setMultiLocaleLoading(`Checking locales ${index + 1}/${applied.length}…`);
+        updateMultiLocaleRowState(item.locale, 'checking…');
+        let read = null;
+        try { read = await readLocaleForWalk(bridge, item.locale, previousHtml); } catch (error) { read = { html: '', error: error?.message || String(error) }; }
+        previousHtml = read.html;
+        const ok = !read.error && equivalent(read.html, item.expected);
+        if (ok) {
+          verified.push(item);
+          updateMultiLocaleRowState(item.locale, `✓ ${item.count} checked`, 'ok');
+        } else {
+          failed.push({ locale: item.locale, reason: read.error || 'MoEngage holds different HTML after the write' });
+          updateMultiLocaleRowState(item.locale, 'check FAILED', 'error');
+        }
+      }
+      const totalMatches = verified.reduce((sum, item) => sum + item.count, 0);
+      if (failed.length) {
+        const list = failed.map((f) => `${localeLabel(f.locale)} (${f.reason})`).join('; ');
+        status(`Replaced and checked ${verified.length}/${items.length} locales. NOT done: ${list}`, 'error');
+        diagIncident('multilocale_apply_partial', `Bulk replace not done in ${failed.length} locale(s)`, { done: verified.map((v) => v.locale), failed });
+      } else {
+        status(`Replaced ${totalMatches} matches in ${verified.length}/${items.length} locales · each locale read back and checked ✓`, 'ok');
+      }
+      diagBreadcrumb('multilocale.apply.done', { localeCount: verified.length, failedCount: failed.length, totalMatches, mode: 'native-settled-verified' });
     } catch (error) {
           diagIncident('multilocale_apply_failed', error?.message || String(error), { appliedLocales: applied.map((item) => item.locale), mode: 'native-hidden-stable' });
       status(`Bulk replace stopped: ${error?.message || error}`, 'error');
@@ -4148,6 +4205,44 @@
       .sort((a, b) => b.needle.length - a.needle.length);
   }
 
+  // Text mode is "what a person sees": the same text matches however the
+  // HTML spells it — & / &amp;, ' / &#39; / &apos;, " / &quot;, a space /
+  // &nbsp; / a line break with indentation (code view re-wraps long text).
+  const SPACE_RE = '(?:[\\s\\u00a0]|&nbsp;|&#160;|&#xa0;)+';
+  const CHAR_RE = {
+    '&': '(?:&amp;|&)',
+    "'": "(?:'|&#39;|&#x27;|&apos;)",
+    '"': '(?:"|&quot;|&#34;|&#x22;)',
+  };
+  function decodeQuery(text) {
+    return String(text)
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
+      .replace(/&#39;|&#x27;|&apos;/gi, "'")
+      .replace(/&quot;|&#34;|&#x22;/gi, '"')
+      .replace(/&amp;/gi, '&');
+  }
+  function textPattern(find) {
+    const plain = decodeQuery(find);
+    if (!plain.trim()) return escapeRegExp(find);
+    let out = '';
+    for (const part of plain.split(/([\s\u00a0]+)/)) {
+      if (!part) continue;
+      if (/^[\s\u00a0]+$/.test(part)) { out += SPACE_RE; continue; }
+      for (const ch of part) out += CHAR_RE[ch] || escapeRegExp(ch);
+    }
+    return out;
+  }
+  // The replacement is written in the same spelling as the text it replaces.
+  function encoderFor(hit) {
+    const steps = [];
+    if (/&amp;/i.test(hit)) steps.push(encodeAmp);
+    else if (/&(?!(?:amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-f]+);)/i.test(hit)) steps.push(decodeAmp);
+    const apos = (hit.match(/&#39;|&#x27;|&apos;/i) || [])[0];
+    if (apos) steps.push((r) => r.replace(/'/g, apos));
+    if (/&quot;/i.test(hit)) steps.push((r) => r.replace(/"/g, '&quot;'));
+    return (r) => steps.reduce((value, step) => step(value), String(r));
+  }
+
   // Returns { re, encodeFor(hit) } or null.
   function compile(find, mode = 'text') {
     if (mode === 'filename') {
@@ -4156,10 +4251,9 @@
       const re = new RegExp(`(?:https?:)?//[^\\s"'()<>]*?/${escapeRegExp(name)}(?:[?#][^\\s"'()<>]*)?(?=[\\s"'()<>]|$)`, 'gi');
       return { re, encodeFor: (hit) => (/&amp;/i.test(hit) ? encodeAmp : (r) => r) };
     }
-    const vs = variants(find);
-    if (!vs.length) return null;
-    const byNeedle = new Map(vs.map((v) => [v.needle, v.encode]));
-    return { re: new RegExp(vs.map((v) => escapeRegExp(v.needle)).join('|'), 'g'), encodeFor: (hit) => byNeedle.get(hit) || ((r) => r) };
+    const needle = String(find || '');
+    if (!needle) return null;
+    return { re: new RegExp(textPattern(needle), 'g'), encodeFor: encoderFor };
   }
 
   function kindAt(text, index) {
@@ -9220,6 +9314,41 @@ module.exports = { isRtlLocale, applyRtl };
     return findWithin(document);
   }
 
+  let lastLocaleSwitch = null;
+
+  // Wait until the native editor really shows `wanted` (not just the tab):
+  // the editor changed since the click that selected it, and is stable.
+  async function waitForLocaleContent(wanted, options = {}) {
+    const timeoutMs = Number(options.timeoutMs) || 6000;
+    const unchangedAfterMs = Number(options.unchangedAfterMs) || 2500;
+    const pending = lastLocaleSwitch && lastLocaleSwitch.locale === wanted && !lastLocaleSwitch.settled ? lastLocaleSwitch : null;
+    const baseEditor = pending ? pending.beforeEditor : null;
+    const baseHtml = pending ? pending.beforeHtml : null;
+    const started = pending ? pending.at : Date.now();
+    let lastEditor = null;
+    let lastHtml = null;
+    let stableSince = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const native = getNativeEditorOutsideWorkspace();
+      const html = String(native?.getValue?.() || '');
+      const selected = getNativeSelectedLocale();
+      const tabOk = !selected || selected === wanted;
+      const changed = !pending || (Boolean(native) && (native !== baseEditor || html !== baseHtml));
+      if (native !== lastEditor || html !== lastHtml) { lastEditor = native; lastHtml = html; stableSince = Date.now(); }
+      const stableMs = Date.now() - stableSince;
+      if (html && tabOk && changed && stableMs >= 300) {
+        if (pending) pending.settled = true;
+        return { html, confirmed: true, locale: wanted };
+      }
+      if (html && tabOk && !changed && Date.now() - started >= unchangedAfterMs && stableMs >= 300) {
+        if (pending) pending.settled = true;
+        return { html, confirmed: false, locale: wanted, reason: 'same HTML as the previous locale' };
+      }
+      await wait(60);
+    }
+    throw new Error(`MoEngage did not show ${wanted} in time`);
+  }
+
   async function switchNativeLocale(target, options = {}) {
     const locale = displayLocale(target);
     if (!locale) return { ok: false, reason: 'Locale is empty' };
@@ -9230,6 +9359,12 @@ module.exports = { isRtlLocale, applyRtl };
       return { ok: true, reason: 'Already active' };
     }
 
+    // Remember what the editor showed before the click: the switch is only
+    // finished when the editor stops showing this (see waitForLocaleContent).
+    {
+      const beforeEditor = getNativeEditorOutsideWorkspace();
+      lastLocaleSwitch = { locale, beforeEditor, beforeHtml: String(beforeEditor?.getValue?.() || ''), at: Date.now(), settled: false };
+    }
     const direct = findDirectLocaleControl(locale);
     if (direct?.type === 'select') setNativeSelect(direct.control, direct.option);
     else if (direct?.type === 'click') direct.control.click();
@@ -9253,32 +9388,32 @@ module.exports = { isRtlLocale, applyRtl };
     return { ok: true, reason: '' };
   }
 
-  async function readNativeLocaleHtmlFast(locale) {
+  // Switch MoEngage to a locale and return ITS html. MoEngage highlights the
+  // tab first and swaps the editor content later; templates also keep the
+  // same <html lang> in every locale. So neither the tab nor lang proves the
+  // content is the new locale's: wait until the editor itself changed (new
+  // instance or new value) and stayed stable. Returns { html, confirmed }.
+  async function readNativeLocaleHtmlSettled(locale, options = {}) {
     const wanted = displayLocale(locale);
-    if (!wanted) return '';
-    const beforeEditor = getNativeEditorOutsideWorkspace();
-    const beforeHtml = String(beforeEditor?.getValue?.() || '');
-    const switched = await switchNativeLocale(wanted, { rebind: false, preferNative: true, timeoutMs: 2400 });
+    if (!wanted) throw new Error('Locale is empty');
+    const switched = await switchNativeLocale(wanted, { rebind: false, preferNative: true, timeoutMs: 4000 });
     if (!switched?.ok) throw new Error(switched?.reason || `Could not switch to ${wanted}`);
-    const started = Date.now();
-    while (Date.now() - started < 1400) {
-      const native = getNativeEditorOutsideWorkspace();
-      const html = String(native?.getValue?.() || '');
-      const nativeLocale = displayLocale(localeFromHtml(html));
-      const selected = getNativeSelectedLocale();
-      const changedEditor = Boolean(native && native !== beforeEditor);
-      const changedHtml = Boolean(html && html !== beforeHtml);
-      const settledSelection = selected === wanted && Date.now() - started >= 160;
-      if (html && (nativeLocale === wanted || changedEditor || changedHtml || settledSelection)) return html;
-      await wait(60);
-    }
-    throw new Error(`Native HTML for ${wanted} was not ready`);
+    return waitForLocaleContent(wanted, options);
+  }
+
+  async function readNativeLocaleHtmlFast(locale) {
+    const result = await readNativeLocaleHtmlSettled(locale);
+    return result.html;
   }
 
   async function rebindWorkspaceAfterLocaleChange(targetLocale = '') {
     const base = root.__RetKitMoEngageCore;
     if (!document.getElementById(IDS.workspace) || !base?.rebindNativeEditorFromMoEngage) return false;
     const wanted = displayLocale(targetLocale);
+    // Bind RetKit only to the editor that really shows the new locale —
+    // binding to the previous locale's editor is how one locale's HTML got
+    // shown (and then saved) under another locale's tab.
+    try { await waitForLocaleContent(wanted, { timeoutMs: 8000 }); } catch {}
 
     for (const delay of [60, 120, 220, 360, 600, 900, 1400]) {
       await wait(delay);
@@ -10747,25 +10882,29 @@ module.exports = { isRtlLocale, applyRtl };
   async function setNativeLocaleHtmlStable(locale, html, options = {}) {
     const wanted = displayLocale(locale);
     if (!wanted) return { ok: false, locale: wanted, reason: 'Locale is empty' };
-    const switched = await switchNativeLocale(wanted, { rebind: false, preferNative: true, timeoutMs: 2400 });
-    if (!switched?.ok) return { ok: false, locale: wanted, reason: switched?.reason || `Could not switch to ${wanted}` };
-    const native = getNativeEditorOutsideWorkspace();
-    if (!native) return { ok: false, locale: wanted, reason: `Native editor for ${wanted} was not found` };
+    let current;
+    try { current = await readNativeLocaleHtmlSettled(wanted); } catch (error) {
+      return { ok: false, locale: wanted, reason: error?.message || String(error) };
+    }
+    const equivalent = root.__RetKitMoEngageCore?.htmlEquivalentForSync;
+    const same = (a, b) => (typeof equivalent === 'function' ? equivalent(a, b) : a === b);
+    // Never write on top of something other than what the replacement was
+    // computed from: that is how one locale's HTML ends up in another.
+    if (Object.prototype.hasOwnProperty.call(options, 'expectedBefore') && !same(current.html, String(options.expectedBefore ?? ''))) {
+      return { ok: false, locale: wanted, reason: `${wanted}: the editor does not show the HTML that was read for this locale — not written` };
+    }
     const commit = root.__RetKitMoEngageCore?.commitNativeHtml;
     if (typeof commit !== 'function') return { ok: false, locale: wanted, reason: 'Native commit helper is unavailable' };
     const next = String(html ?? '');
-    // commitThroughFroala(fast:false) already performs two persistence checks
-    // after the React/Froala render cycle. Do not pay a second fixed 700ms
-    // settle delay here for every locale.
     const result = await Promise.resolve(commit(next, { fast: false, locale: wanted }));
     const actual = String(getNativeEditorOutsideWorkspace()?.getValue?.() || '');
-    const equivalent = root.__RetKitMoEngageCore?.htmlEquivalentForSync;
-    const persisted = Boolean(result?.ok) && (typeof equivalent === 'function' ? equivalent(actual, next) : actual === next);
+    const stillThere = getNativeSelectedLocale() ? getNativeSelectedLocale() === wanted : true;
+    const persisted = Boolean(result?.ok) && stillThere && same(actual, next);
     return {
       ok: persisted,
       locale: wanted,
       persisted,
-      reason: persisted ? '' : (result?.reason || `${wanted}: MoEngage reverted the HTML after the stable commit`),
+      reason: persisted ? '' : (result?.reason || `${wanted}: MoEngage did not keep the HTML`),
     };
   }
 
@@ -10807,6 +10946,7 @@ module.exports = { isRtlLocale, applyRtl };
     removeLocale: (locale) => removeNativeLocale(locale),
     switchLocale: (locale, options) => switchNativeLocale(locale, options || {}).then((result) => Boolean(result?.ok)),
     readLocaleHtmlFast: (locale) => readNativeLocaleHtmlFast(locale),
+    readLocaleHtmlSettled: (locale, options) => readNativeLocaleHtmlSettled(locale, options || {}),
     setLocaleHtml: (locale, html, options) => setNativeLocaleHtml(locale, html, options),
     setLocaleHtmlFast: (locale, html, options) => setNativeLocaleHtmlFast(locale, html, options),
     setLocaleHtmlStable: (locale, html, options) => setNativeLocaleHtmlStable(locale, html, options),

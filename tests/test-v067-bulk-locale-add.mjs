@@ -12,7 +12,7 @@ const applyEnd = coreSource.indexOf('\n  async function refreshLocaleManager', a
 const applyBody = coreSource.slice(applyStart, applyEnd);
 assert.ok(applyStart >= 0, 'bulk apply function should exist');
 assert.match(applyBody, /document\.getElementById\(IDS\.replaceInput\)/, 'bulk apply uses the main replacement field');
-assert.match(applyBody, /readLocaleHtmlFast\(item\.locale\)/, 'bulk apply re-reads each locale before writing');
+assert.match(applyBody, /readLocaleForWalk\(bridge, item\.locale/, 'bulk apply re-reads each locale (settled) before writing');
 
 // Bulk apply must use the hidden native writer rather than rebinding RetKit to every locale.
 assert.match(bridgeSource, /setLocaleHtmlFast:/, 'bridge should expose a hidden fast locale writer');

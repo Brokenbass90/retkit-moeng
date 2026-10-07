@@ -1684,6 +1684,20 @@
     if (row) row.dataset.state = state;
   }
 
+  // One locale's HTML, read only after MoEngage really shows that locale.
+  // If it looks identical to the locale read just before, look again after a
+  // pause: identical locales are fine, a late swap is not.
+  async function readLocaleForWalk(bridge, locale, previousHtml) {
+    if (!bridge.readLocaleHtmlSettled) return { html: String(await Promise.resolve(bridge.readLocaleHtmlFast(locale)) || ''), confirmed: true };
+    let read = await Promise.resolve(bridge.readLocaleHtmlSettled(locale));
+    if (!read.confirmed && previousHtml != null && read.html === previousHtml) {
+      await sleep(1500);
+      const again = await Promise.resolve(bridge.readLocaleHtmlSettled(locale, { unchangedAfterMs: 600 }));
+      read = { ...again, confirmed: again.confirmed, identicalToPrevious: again.html === previousHtml };
+    }
+    return read;
+  }
+
   async function scanMultiLocaleReplace() {
     if (STATE.multiLocaleBusy) { STATE.multiLocaleRescanPending = true; return; }
     const bridge = multiLocaleBridge();
@@ -1725,6 +1739,10 @@
       if (!locales.length) throw new Error('No known MoEngage locales are available. Retry the scan below.');
 
       try { origin = String(await Promise.resolve(bridge.getActiveLocale?.() || '')); } catch {}
+      // The open locale's unsaved edit goes to MoEngage before we walk away.
+      const flush = await flushBeforeLocaleSwitch();
+      STATE.localeSwitchUntil = 0;
+      if (!flush.ok) throw new Error(flush.reason);
       setMultiLocaleLoading(`Scanning locales 0/${locales.length}…`);
       status(`Scanning ${locales.length} locales…`, 'neutral');
       diagBreadcrumb('multilocale.scan.start', { localeCount: locales.length, mode: 'native-fast' });
@@ -1732,7 +1750,9 @@
       for (let index = 0; index < locales.length; index += 1) {
         const locale = locales[index];
         setMultiLocaleLoading(`Scanning locales ${index + 1}/${locales.length}…`);
-        htmlByLocale[locale] = String(await Promise.resolve(bridge.readLocaleHtmlFast(locale)) || '');
+        const previous = index > 0 ? htmlByLocale[locales[index - 1]] : null;
+        const read = await readLocaleForWalk(bridge, locale, previous);
+        htmlByLocale[locale] = String(read.html || '');
       }
       if (String(document.getElementById(IDS.findInput)?.value || '') !== query) {
         // The query changed mid-walk: this result is stale, wait for the button.
@@ -1842,8 +1862,13 @@
       return;
     }
     const origin = String(await Promise.resolve(bridge.getActiveLocale?.() || ''));
+    const flush = await flushBeforeLocaleSwitch();
+    STATE.localeSwitchUntil = 0;
+    if (!flush.ok) { status(flush.reason, 'error'); return; }
     const viewState = captureEditorViewState();
     const applied = [];
+    const failed = [];
+    let previousHtml = null;
     setMultiLocaleBusy(true, `Replacing locales 0/${items.length}…`);
     diagBreadcrumb('multilocale.apply.start', { locales: items.map((item) => item.locale), queryLength: query.length, mode: 'native-hidden-stable' });
     try {
@@ -1853,26 +1878,58 @@
         const item = items[index];
         setMultiLocaleLoading(`Replacing locales ${index + 1}/${items.length}…`);
         updateMultiLocaleRowState(item.locale, `reading ${index + 1}/${items.length}…`);
-        const currentHtml = String(await Promise.resolve(bridge.readLocaleHtmlFast(item.locale)) || '');
+        const read = await readLocaleForWalk(bridge, item.locale, previousHtml);
+        const currentHtml = String(read.html || '');
+        previousHtml = currentHtml;
         const own = Object.prototype.hasOwnProperty.call(STATE.multiLocaleOverrides || {}, item.locale)
           ? String(STATE.multiLocaleOverrides[item.locale]) : null;
         const result = smartReplace(currentHtml, query, own ?? replacement, mode);
         if (!result.count) {
-          updateMultiLocaleRowState(item.locale, 'no current matches', 'warn');
+          updateMultiLocaleRowState(item.locale, 'not found now', 'error');
+          failed.push({ locale: item.locale, reason: 'no matches when writing' });
           continue;
         }
         updateMultiLocaleRowState(item.locale, `writing ${result.count}…`);
-        const write = await Promise.resolve(bridge.setLocaleHtmlStable(item.locale, result.value));
+        const write = await Promise.resolve(bridge.setLocaleHtmlStable(item.locale, result.value, { expectedBefore: currentHtml }));
         if (!write?.ok) {
-          updateMultiLocaleRowState(item.locale, 'write failed', 'error');
-          throw new Error(write?.reason || `${item.locale}: native write failed`);
+          updateMultiLocaleRowState(item.locale, 'NOT written', 'error');
+          failed.push({ locale: item.locale, reason: write?.reason || 'write failed' });
+          continue;
         }
-        applied.push({ locale: item.locale, count: result.count });
+        applied.push({ locale: item.locale, count: result.count, expected: result.value });
         updateMultiLocaleRowState(item.locale, `✓ ${result.count}`, 'ok');
       }
-        const totalMatches = applied.reduce((sum, item) => sum + item.count, 0);
-      status(`Replaced ${totalMatches} matches in ${applied.length} locales · ↶ Original keeps each locale's first version`, applied.length ? 'ok' : 'warn');
-      diagBreadcrumb('multilocale.apply.done', { localeCount: applied.length, totalMatches, mode: 'native-hidden-stable' });
+
+      // Proof pass: read every written locale back from MoEngage and check it
+      // holds exactly what was written (no old matches left, nothing else lost).
+      const verified = [];
+      const equivalent = (a, b) => htmlEquivalentForSync(a, b);
+      previousHtml = null;
+      for (let index = 0; index < applied.length; index += 1) {
+        const item = applied[index];
+        setMultiLocaleLoading(`Checking locales ${index + 1}/${applied.length}…`);
+        updateMultiLocaleRowState(item.locale, 'checking…');
+        let read = null;
+        try { read = await readLocaleForWalk(bridge, item.locale, previousHtml); } catch (error) { read = { html: '', error: error?.message || String(error) }; }
+        previousHtml = read.html;
+        const ok = !read.error && equivalent(read.html, item.expected);
+        if (ok) {
+          verified.push(item);
+          updateMultiLocaleRowState(item.locale, `✓ ${item.count} checked`, 'ok');
+        } else {
+          failed.push({ locale: item.locale, reason: read.error || 'MoEngage holds different HTML after the write' });
+          updateMultiLocaleRowState(item.locale, 'check FAILED', 'error');
+        }
+      }
+      const totalMatches = verified.reduce((sum, item) => sum + item.count, 0);
+      if (failed.length) {
+        const list = failed.map((f) => `${localeLabel(f.locale)} (${f.reason})`).join('; ');
+        status(`Replaced and checked ${verified.length}/${items.length} locales. NOT done: ${list}`, 'error');
+        diagIncident('multilocale_apply_partial', `Bulk replace not done in ${failed.length} locale(s)`, { done: verified.map((v) => v.locale), failed });
+      } else {
+        status(`Replaced ${totalMatches} matches in ${verified.length}/${items.length} locales · each locale read back and checked ✓`, 'ok');
+      }
+      diagBreadcrumb('multilocale.apply.done', { localeCount: verified.length, failedCount: failed.length, totalMatches, mode: 'native-settled-verified' });
     } catch (error) {
           diagIncident('multilocale_apply_failed', error?.message || String(error), { appliedLocales: applied.map((item) => item.locale), mode: 'native-hidden-stable' });
       status(`Bulk replace stopped: ${error?.message || error}`, 'error');

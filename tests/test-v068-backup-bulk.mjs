@@ -40,9 +40,9 @@ const applyEnd = coreSource.indexOf('\n  async function rollbackMultiLocaleRepla
   ? coreSource.indexOf('\n  async function rollbackMultiLocaleReplace', applyStart)
   : coreSource.indexOf('\n  async function refreshLocaleManager', applyStart);
 const applyBody = coreSource.slice(applyStart, applyEnd);
-assert.match(applyBody, /readLocaleHtmlFast/, 'bulk apply should read fresh native HTML for every locale');
-assert.doesNotMatch(applyBody, /expectedBefore/, 'bulk apply must not reject because the HTML changed after scan');
-assert.doesNotMatch(applyBody, /verifyLocaleHtmlFast/, 'bulk apply should not perform a second full verification pass');
+assert.match(applyBody, /readLocaleForWalk/, 'bulk apply should read fresh, settled native HTML for every locale');
+assert.match(applyBody, /expectedBefore: currentHtml/, 'write is guarded by the fresh read (not the scan), so a late locale swap cannot write one locale into another');
+assert.match(applyBody, /Proof pass/, 'v0.8.5: every written locale is read back and checked');
 assert.match(applyBody, /(?:replaceAllLiteral|smartReplace)\(currentHtml|replaceAllLiteral\(freshHtml/, 'bulk apply should replace against the freshly read HTML');
 
 // Locale creation now deliberately hands final confirmation to native MoEngage.
