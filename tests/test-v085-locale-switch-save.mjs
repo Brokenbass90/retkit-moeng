@@ -39,3 +39,19 @@ const commit = between(core, 'async function commitThroughFroala', 'function des
 assert.match(commit, /for \(let waited = 0; !ok && waited < 3000/, 'commit waits up to 3s more before calling it rejected');
 assert.match(commit, /sync\.settled-late/, 'late settle is visible in Diagnostics');
 console.log('✓ RetKit v0.8.5 slow MoEngage settle is not a rejection');
+
+// Empty <body> never overwrites an email with content (pt_PT arrived with <body></body>).
+{
+  const fnSrc = between(core, 'function htmlBodyHasContent(', 'function shouldSkipNativeCommit');
+  // eslint-disable-next-line no-new-func
+  const api = new Function(`${fnSrc}; return { htmlBodyHasContent, shouldBlockEmptyNativeCommit };`)();
+  const full = '<html><head><style>p{}</style></head><body><table><tr><td>Olá</td></tr></table></body></html>';
+  const empty = '<html><head><style>p{}</style></head><body></body></html>';
+  assert.equal(api.htmlBodyHasContent(empty), false);
+  assert.equal(api.htmlBodyHasContent(full), true);
+  assert.equal(api.shouldBlockEmptyNativeCommit({ localHtml: empty, nativeHtml: full }), true, 'empty body blocked');
+  assert.equal(api.shouldBlockEmptyNativeCommit({ localHtml: full, nativeHtml: empty }), false, 'filling an empty email is allowed');
+  assert.equal(api.shouldBlockEmptyNativeCommit({ localHtml: '<p>x</p>', nativeHtml: full }), false, 'fragments still allowed');
+  assert.match(between(core, 'async function commitThroughFroala', 'function describeHtmlDifference'), /shouldBlockEmptyNativeCommit/, 'every writer is guarded');
+  console.log('✓ RetKit v0.8.5 empty <body> never overwrites an email');
+}

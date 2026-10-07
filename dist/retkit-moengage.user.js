@@ -1332,10 +1332,23 @@
     return beautifyEmailHtml(a).replace(/\r\n?/g, '\n').trim() === beautifyEmailHtml(b).replace(/\r\n?/g, '\n').trim();
   }
 
+  // Is there anything in <body>? (tags with content, images, text, MoEngage
+  // blocks). A document that is only <head><style> is an empty email.
+  function htmlBodyHasContent(html) {
+    const source = String(html ?? '');
+    const match = source.match(/<body\b[^>]*>([\s\S]*?)(?:<\/body>|$)/i);
+    const body = match ? match[1] : (/<html\b/i.test(source) ? '' : source);
+    const stripped = body.replace(/<!--[\s\S]*?-->/g, '').replace(/<(?:script|style)\b[\s\S]*?<\/(?:script|style)>/gi, '');
+    if (/<(?:img|table|a|p|div|td|span|center|h[1-6])\b/i.test(stripped)) return true;
+    return /\S/.test(stripped.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' '));
+  }
+
   function shouldBlockEmptyNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
     const local = String(localHtml ?? '').trim();
     const native = String(nativeHtml ?? '').trim();
-    return !local && Boolean(native);
+    if (!local) return Boolean(native);
+    // An email whose body is empty must never overwrite one that has content.
+    return !htmlBodyHasContent(local) && htmlBodyHasContent(native);
   }
 
   function shouldSkipNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
@@ -1781,6 +1794,9 @@
     // Keep the author's original formatting outside the edited region so
     // MoEngage never receives a re-indented copy of the whole email.
     const nativeBefore = native.getValue?.() || '';
+    if (shouldBlockEmptyNativeCommit({ localHtml: next, nativeHtml: nativeBefore })) {
+      return { ok: false, reason: 'Refused: the new HTML has an empty <body> and would erase the email' };
+    }
     // First write for this campaign+locale: keep the untouched version so the
     // user can return to it (see src/backup/original-snapshots.js).
     try { root.__RetKitOriginals?.captureBeforeCommit?.(nativeBefore, { locale: options.locale }); } catch {}
@@ -3539,7 +3555,8 @@
       STATE.dirty = false;
       STATE.pendingApply = false;
       diagBreadcrumb('sync.empty-blocked', { revision: startedRevision, nativeLength: nativeHtmlBefore.length });
-      status('Empty HTML was not sent to MoEngage', 'error');
+      diagIncident('empty_body_blocked', 'RetKit refused to write an email with an empty <body>', { html: next, nativeHtml: nativeHtmlBefore });
+      status('Not saved: this HTML has an empty <body> — MoEngage keeps the current email', 'error');
       return false;
     }
     if (shouldSkipNativeCommit({ localHtml: next, nativeHtml: nativeHtmlBefore })) {
