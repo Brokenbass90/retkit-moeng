@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.6
+// @version      0.8.7
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -2078,8 +2078,9 @@
     if (action === 'show') ensureLauncher();
     else if (action === 'remove') launcher?.remove();
     else if (action === 'close-workspace') {
-      diagBreadcrumb('workspace.route-exit', { from: STATE.launcherRoute, to: route });
-      closeWorkspace();
+      diagBreadcrumb('workspace.route-exit', { from: STATE.launcherRoute, to: route, dirty: STATE.dirty });
+      if (STATE.dirty) diagIncident('route_exit_unsaved', 'Left the email page with an unsaved RetKit edit', { revision: STATE.editRevision });
+      teardownWorkspace();
       document.getElementById(IDS.launcher)?.remove();
     }
     STATE.launcherRoute = route;
@@ -3146,7 +3147,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.6</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.7</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3171,7 +3172,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.6',
+        version: '0.8.7',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3596,9 +3597,22 @@
         return false;
       }
 
+      let retried = false;
+      if (!result.ok && result.outcome === 'changed' && htmlBodyHasContent(next)
+        && !htmlBodyHasContent((getNativeEditor() || native)?.getValue?.() || '')) {
+        // MoEngage dropped to its empty skeleton. Write our HTML once more.
+        diagBreadcrumb('sync.skeleton-retry', { revision: startedRevision });
+        await sleep(800);
+        const again = await commitThroughFroala(next, { locale: STATE.boundLocale || undefined });
+        retried = true;
+        if (again.ok) Object.assign(result, again);
+      }
       if (!result.ok) {
         STATE.dirty = true;
-        const reason = result.reason || 'MoEngage rejected the edit';
+        const skeleton = !htmlBodyHasContent((getNativeEditor() || native)?.getValue?.() || '');
+        const reason = skeleton
+          ? `⚠ MoEngage EMPTIED this locale${retried ? ' (retried)' : ''}. Do NOT press Save in MoEngage — your HTML is still here in RetKit; reload the page and paste it back.`
+          : (result.reason || 'MoEngage rejected the edit');
         const pendingRtl = root.__RetKitPendingRtlVerification;
         if (pendingRtl && htmlEquivalentForSync(pendingRtl.html, next)) {
           diagBreadcrumb('rtl.fix.sync-rejected', { ...(pendingRtl.meta || {}), revision: startedRevision, reason });
@@ -4104,8 +4118,32 @@
     }
   }
 
-  function closeWorkspace() {
-    if (STATE.dirty) pushOverlayToNative(true);
+  // Close = save first, then take the workspace down. Before 0.8.7 Close
+  // fired the save and tore the workspace down at the same moment; the save
+  // (Code View toggles, ~5 s) then raced with the teardown and MoEngage was
+  // left with its empty skeleton (<head><style> + empty <body>) — logs
+  // 2026-10-07/08: every "nativeLength 417" rejection followed a Close.
+  async function closeWorkspace() {
+    if (STATE.closing) return;
+    STATE.closing = true;
+    try {
+      if (STATE.dirty || STATE.applying) {
+        status('Saving to MoEngage before closing…', 'neutral');
+        const flush = await flushBeforeLocaleSwitch();
+        STATE.localeSwitchUntil = 0;
+        if (!flush.ok) {
+          status(`Not closed: ${flush.reason}`, 'error');
+          diagIncident('close_blocked_unsaved', 'Close stopped: the edit did not reach MoEngage', { revision: STATE.editRevision });
+          return;
+        }
+      }
+      teardownWorkspace();
+    } finally {
+      STATE.closing = false;
+    }
+  }
+
+  function teardownWorkspace() {
     if (STATE.pollTimer) clearInterval(STATE.pollTimer);
     if (STATE.syncTimer) clearTimeout(STATE.syncTimer);
     if (STATE.foldTimer) clearTimeout(STATE.foldTimer);
@@ -4283,7 +4321,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.6 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.7 loaded');
   }
 
   boot();
@@ -6033,7 +6071,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.6',
+          clientVersion: '0.8.7',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8366,7 +8404,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.6');
+    setTextContentIfChanged(version, 'v0.8.7');
     return true;
   }
 
@@ -11257,7 +11295,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.6' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.7' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -11283,7 +11321,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.6 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.7 loaded');
   }
 
   bootBridge();

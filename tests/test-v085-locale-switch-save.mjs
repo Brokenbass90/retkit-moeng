@@ -79,3 +79,12 @@ console.log('✓ RetKit v0.8.5 slow MoEngage settle is not a rejection');
   assert.match(bridge, /diagIncident\?\.\('original_restored'/, 'every restore is logged persistently');
   console.log('✓ RetKit v0.8.6 Original never stores or restores an empty email');
 }
+{
+  const close = between(core, 'async function closeWorkspace()', 'function teardownWorkspace()');
+  assert.match(close, /await flushBeforeLocaleSwitch\(\)/, 'Close saves first and waits');
+  assert.ok(close.indexOf('await flushBeforeLocaleSwitch') < close.indexOf('teardownWorkspace()'), 'teardown only after the save');
+  assert.match(close, /if \(!flush\.ok\)[\s\S]*?return;/, 'a failed save keeps the workspace open');
+  assert.doesNotMatch(core, /function closeWorkspace\(\) \{\s*if \(STATE\.dirty\) pushOverlayToNative\(true\);/, 'no fire-and-forget save on close');
+  assert.match(core, /sync\.skeleton-retry/, 'empty skeleton after a write is retried');
+  console.log('✓ RetKit v0.8.7 Close saves before teardown; skeleton retry');
+}
