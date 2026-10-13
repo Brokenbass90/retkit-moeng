@@ -16,6 +16,7 @@ const aiModulePaths = [
   'src/backup/original-snapshots.js',
   'src/ai/shared/protocol.js',
   'src/ai/client/bridge-client.js',
+  'src/ai/client/agent-relay.js',
   'src/ai/context/context-adapter.js',
   'src/ai/ui/attachment-dropzone.js',
   'src/ai/ui/diff-view.js',

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.9
+
+- New **🤖 Агент** button in the RetKit top bar: connects your own Claude or Codex to the open email. It opens a small Retention Studio window (keep it open) that relays the agent's commands to this tab.
+- The agent can read the email and any locale, write the open locale (only with a fresh hash, never an empty body), switch locales, run "Search all locales" and prepare a replacement. Pressing Replace and saving the campaign in MoEngage stay human clicks.
+
 ## 0.8.8 — запись в MoEngage не забирает клавиатуру и выделение
 
 - Запись в MoEngage идёт через его редактор Froala и на ~2 с ставит фокус в него. До 0.8.8 в это время пропадало выделение в RetKit, а набранные клавиши уходили в скрытый редактор MoEngage и затирались (стенд: из 10 букв, набранных во время записи, в письме не осталось ни одной).
