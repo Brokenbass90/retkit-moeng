@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.7
+// @version      0.8.8
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1047,7 +1047,47 @@
     return box.querySelector('.fr-element') || box.querySelector('.fr-wrapper');
   }
 
+  // A write into MoEngage goes through Froala and has to focus MoEngage's own
+  // editor for a moment. Before 0.8.8 that silently took the focus (and the
+  // visible selection) away from RetKit: keys typed during the ~2 s write went
+  // into MoEngage's hidden editor and were then overwritten — "the selection
+  // jumped and something got deleted somewhere". Now: while a write runs, real
+  // keystrokes outside RetKit are stopped and the focus goes back to RetKit;
+  // afterwards RetKit's focus and selection are restored as they were.
   async function commitThroughFroala(next, options = {}) {
+    const overlay = STATE.overlayEditor;
+    const workspace = document.getElementById(IDS.workspace);
+    const hadFocus = Boolean(STATE.overlayFocused);
+    const view = hadFocus ? captureEditorViewState() : null;
+    const revisionBefore = STATE.editRevision;
+    const docs = new Set([document]);
+    try { const doc = getFroalaVisualTarget()?.ownerDocument; if (doc) docs.add(doc); } catch {}
+    const guard = (event) => {
+      if (!event.isTrusted || !workspace?.isConnected) return;
+      if (event.target && workspace.contains(event.target)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      STATE.keysBlockedDuringWrite = (STATE.keysBlockedDuringWrite || 0) + 1;
+      setTimeout(() => overlay?.focus?.(), 0);
+      status('Saving to MoEngage… type again in 1–2 s — RetKit keeps your keys out of MoEngage', 'neutral');
+    };
+    const kinds = ['keydown', 'keypress', 'beforeinput', 'paste', 'cut', 'drop'];
+    for (const doc of docs) for (const kind of kinds) { try { doc.addEventListener(kind, guard, true); } catch {} }
+    STATE.keysBlockedDuringWrite = 0;
+    try {
+      return await commitThroughFroalaRaw(next, options);
+    } finally {
+      for (const doc of docs) for (const kind of kinds) { try { doc.removeEventListener(kind, guard, true); } catch {} }
+      if (STATE.keysBlockedDuringWrite) diagBreadcrumb('sync.keys-kept-out', { count: STATE.keysBlockedDuringWrite });
+      if (hadFocus && overlay && STATE.overlayEditor === overlay) {
+        overlay.focus?.();
+        // Put the selection back only if nothing was typed meanwhile.
+        if (STATE.editRevision === revisionBefore) restoreEditorViewState(view);
+      }
+    }
+  }
+
+  async function commitThroughFroalaRaw(next, options = {}) {
     const fast = options.fast === true;
     let native = getNativeEditor() || STATE.nativeEditor;
     const button = getCodeViewButton();
@@ -2409,7 +2449,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.7</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.8</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2434,7 +2474,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.7',
+        version: '0.8.8',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3583,7 +3623,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.7 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.8 loaded');
   }
 
   boot();

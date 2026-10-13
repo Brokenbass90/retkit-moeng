@@ -88,3 +88,11 @@ console.log('✓ RetKit v0.8.5 slow MoEngage settle is not a rejection');
   assert.match(core, /sync\.skeleton-retry/, 'empty skeleton after a write is retried');
   console.log('✓ RetKit v0.8.7 Close saves before teardown; skeleton retry');
 }
+{
+  const wrap = between(core, 'async function commitThroughFroala(next', 'async function commitThroughFroalaRaw(');
+  assert.match(wrap, /event\.isTrusted/, 'only real keystrokes are stopped (synthetic Froala events pass)');
+  assert.match(wrap, /workspace\.contains\(event\.target\)/, 'keys inside RetKit are untouched');
+  assert.match(wrap, /removeEventListener/, 'guard is always removed');
+  assert.match(wrap, /restoreEditorViewState\(view\)/, 'selection comes back after the write');
+  console.log('✓ RetKit v0.8.8 a write never takes the keyboard or the selection from RetKit');
+}
