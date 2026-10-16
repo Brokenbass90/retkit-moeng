@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.10
+
+- The Logs window closes by itself: after Download / Copy / Clear, on a click outside it, on Esc, or on a second press of the Logs button.
+- `slow_sync` is recorded only above 6 s: up to ~4.5 s is the normal wait while MoEngage accepts a large email.
+
 ## 0.8.9
 
 - New **🤖 Агент** button in the RetKit top bar: connects your own Claude or Codex to the open email. It opens a small Retention Studio window (keep it open) that relays the agent's commands to this tab.

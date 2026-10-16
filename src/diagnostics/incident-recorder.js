@@ -244,7 +244,8 @@
     uiUnsubscribe = recorder.subscribe(renderBadge);
 
     button.addEventListener('click', () => {
-      document.getElementById('retkit-diagnostics-popover')?.remove();
+      const open = document.getElementById('retkit-diagnostics-popover');
+      if (open) { open.remove(); return; }
       const pop = document.createElement('div');
       pop.id = 'retkit-diagnostics-popover';
       pop.style.cssText = 'position:fixed;top:58px;right:76px;z-index:2147483646;width:360px;max-height:70vh;overflow:auto;background:#111b28;border:1px solid #334155;border-radius:12px;padding:12px;color:#dce6f4;box-shadow:0 16px 40px rgba(0,0,0,.45);font:12px/1.45 Inter,system-ui,sans-serif';
@@ -289,14 +290,33 @@
         includeHtml: Boolean(pop.querySelector('[data-html]')?.checked),
         html: pop.querySelector('[data-html]')?.checked ? String(options.getHtml?.() || '') : '',
       });
-      pop.querySelector('[data-close]')?.addEventListener('click', () => pop.remove());
-      pop.querySelector('[data-clear]')?.addEventListener('click', () => { recorder.clear(); pop.remove(); });
-      pop.querySelector('[data-copy]')?.addEventListener('click', async () => {
+      // Окно закрывается само: после «Скачать» / «Скопировать» / «Очистить»,
+      // по клику мимо него и по Esc — крестик больше не единственный выход.
+      const onOutside = (event) => {
+        if (pop.contains(event.target) || button.contains(event.target)) return;
+        closePop();
+      };
+      const onKey = (event) => { if (event.key === 'Escape') closePop(); };
+      function closePop() {
+        pop.remove();
+        document.removeEventListener('pointerdown', onOutside, true);
+        document.removeEventListener('keydown', onKey, true);
+      }
+      setTimeout(() => {
+        document.addEventListener('pointerdown', onOutside, true);
+        document.addEventListener('keydown', onKey, true);
+      }, 0);
+      pop.querySelector('[data-close]')?.addEventListener('click', closePop);
+      pop.querySelector('[data-clear]')?.addEventListener('click', () => { recorder.clear(); closePop(); });
+      pop.querySelector('[data-copy]')?.addEventListener('click', async (event) => {
         try { await navigator.clipboard.writeText(JSON.stringify(makeReport(), null, 2)); } catch {}
+        event.currentTarget.textContent = 'Copied ✓';
+        setTimeout(closePop, 450);
       });
       pop.querySelector('[data-download]')?.addEventListener('click', () => {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         downloadJson(`retkit-diagnostics-${stamp}.json`, makeReport());
+        closePop();
       });
       document.body.appendChild(pop);
     });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.9
+// @version      0.8.10
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -256,7 +256,8 @@
     uiUnsubscribe = recorder.subscribe(renderBadge);
 
     button.addEventListener('click', () => {
-      document.getElementById('retkit-diagnostics-popover')?.remove();
+      const open = document.getElementById('retkit-diagnostics-popover');
+      if (open) { open.remove(); return; }
       const pop = document.createElement('div');
       pop.id = 'retkit-diagnostics-popover';
       pop.style.cssText = 'position:fixed;top:58px;right:76px;z-index:2147483646;width:360px;max-height:70vh;overflow:auto;background:#111b28;border:1px solid #334155;border-radius:12px;padding:12px;color:#dce6f4;box-shadow:0 16px 40px rgba(0,0,0,.45);font:12px/1.45 Inter,system-ui,sans-serif';
@@ -301,14 +302,33 @@
         includeHtml: Boolean(pop.querySelector('[data-html]')?.checked),
         html: pop.querySelector('[data-html]')?.checked ? String(options.getHtml?.() || '') : '',
       });
-      pop.querySelector('[data-close]')?.addEventListener('click', () => pop.remove());
-      pop.querySelector('[data-clear]')?.addEventListener('click', () => { recorder.clear(); pop.remove(); });
-      pop.querySelector('[data-copy]')?.addEventListener('click', async () => {
+      // Окно закрывается само: после «Скачать» / «Скопировать» / «Очистить»,
+      // по клику мимо него и по Esc — крестик больше не единственный выход.
+      const onOutside = (event) => {
+        if (pop.contains(event.target) || button.contains(event.target)) return;
+        closePop();
+      };
+      const onKey = (event) => { if (event.key === 'Escape') closePop(); };
+      function closePop() {
+        pop.remove();
+        document.removeEventListener('pointerdown', onOutside, true);
+        document.removeEventListener('keydown', onKey, true);
+      }
+      setTimeout(() => {
+        document.addEventListener('pointerdown', onOutside, true);
+        document.addEventListener('keydown', onKey, true);
+      }, 0);
+      pop.querySelector('[data-close]')?.addEventListener('click', closePop);
+      pop.querySelector('[data-clear]')?.addEventListener('click', () => { recorder.clear(); closePop(); });
+      pop.querySelector('[data-copy]')?.addEventListener('click', async (event) => {
         try { await navigator.clipboard.writeText(JSON.stringify(makeReport(), null, 2)); } catch {}
+        event.currentTarget.textContent = 'Copied ✓';
+        setTimeout(closePop, 450);
       });
       pop.querySelector('[data-download]')?.addEventListener('click', () => {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         downloadJson(`retkit-diagnostics-${stamp}.json`, makeReport());
+        closePop();
       });
       document.body.appendChild(pop);
     });
@@ -3187,7 +3207,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.9</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.10</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3212,7 +3232,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.9',
+        version: '0.8.10',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3683,7 +3703,9 @@
         diagBreadcrumb(persisted ? 'rtl.fix.persisted' : 'rtl.fix.sync-mismatch', { ...(pendingRtl.meta || {}), revision: startedRevision, durationMs });
         if (persisted) root.__RetKitPendingRtlVerification = null;
       }
-      if (durationMs > 3500) diagIncident('slow_sync', `MoEngage sync took ${durationMs}ms`, { revision: startedRevision, durationMs, html: next });
+      // До ~4.5 с — норма: RetKit ждёт, пока MoEngage примет большое письмо
+      // (проверка «не откатил ли»). Тревога — только когда заметно дольше.
+      if (durationMs > 6000) diagIncident('slow_sync', `MoEngage sync took ${durationMs}ms`, { revision: startedRevision, durationMs, html: next });
       const savedLocale = STATE.boundLocale || currentBridgeLocale();
       status(`${savedLocale ? `${savedLocale} · ` : ''}saved to MoEngage ✓ ${new Date().toLocaleTimeString().slice(0, 5)}`, 'ok');
 
@@ -4362,7 +4384,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.9 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.10 loaded');
   }
 
   boot();
@@ -6112,7 +6134,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.9',
+          clientVersion: '0.8.10',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8639,7 +8661,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.9');
+    setTextContentIfChanged(version, 'v0.8.10');
     return true;
   }
 
@@ -11530,7 +11552,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.9' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.10' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -11556,7 +11578,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.9 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.10 loaded');
   }
 
   bootBridge();

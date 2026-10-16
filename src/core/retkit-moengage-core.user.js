@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.9
+// @version      0.8.10
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -2449,7 +2449,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.9</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.10</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2474,7 +2474,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.9',
+        version: '0.8.10',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -2945,7 +2945,9 @@
         diagBreadcrumb(persisted ? 'rtl.fix.persisted' : 'rtl.fix.sync-mismatch', { ...(pendingRtl.meta || {}), revision: startedRevision, durationMs });
         if (persisted) root.__RetKitPendingRtlVerification = null;
       }
-      if (durationMs > 3500) diagIncident('slow_sync', `MoEngage sync took ${durationMs}ms`, { revision: startedRevision, durationMs, html: next });
+      // До ~4.5 с — норма: RetKit ждёт, пока MoEngage примет большое письмо
+      // (проверка «не откатил ли»). Тревога — только когда заметно дольше.
+      if (durationMs > 6000) diagIncident('slow_sync', `MoEngage sync took ${durationMs}ms`, { revision: startedRevision, durationMs, html: next });
       const savedLocale = STATE.boundLocale || currentBridgeLocale();
       status(`${savedLocale ? `${savedLocale} · ` : ''}saved to MoEngage ✓ ${new Date().toLocaleTimeString().slice(0, 5)}`, 'ok');
 
@@ -3624,7 +3626,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.9 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.10 loaded');
   }
 
   boot();
