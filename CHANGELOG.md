@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.11
+
+- Locale switch fixed: when an email's `<html lang>` named another language than its tab (a French email pasted into es_ES), RetKit took itself for that language — the fr_FR click did nothing or ended with "could not bind the FR_FR editor". The selected MoEngage tab is now the truth; lang no longer blocks binding.
+- Locale switches are logged (start / done / failed), and a failed bind writes a `locale_bind_failed` incident with the reason.
+- Logs window: it closes first and then copies/downloads, so it never stays open.
+
 ## 0.8.10
 
 - The Logs window closes by itself: after Download / Copy / Clear, on a click outside it, on Esc, or on a second press of the Logs button.

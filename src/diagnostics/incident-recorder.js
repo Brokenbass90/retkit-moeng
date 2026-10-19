@@ -308,15 +308,20 @@
       }, 0);
       pop.querySelector('[data-close]')?.addEventListener('click', closePop);
       pop.querySelector('[data-clear]')?.addEventListener('click', () => { recorder.clear(); closePop(); });
-      pop.querySelector('[data-copy]')?.addEventListener('click', async (event) => {
-        try { await navigator.clipboard.writeText(JSON.stringify(makeReport(), null, 2)); } catch {}
-        event.currentTarget.textContent = 'Copied ✓';
-        setTimeout(closePop, 450);
+      // Сначала закрываем, потом работаем: если отчёт по какой-то причине
+      // не соберётся, окно всё равно не останется висеть.
+      pop.querySelector('[data-copy]')?.addEventListener('click', () => {
+        let text = '';
+        try { text = JSON.stringify(makeReport(), null, 2); } catch (error) { text = String(error?.message || error); }
+        closePop();
+        try { navigator.clipboard.writeText(text).catch(() => {}); } catch {}
       });
       pop.querySelector('[data-download]')?.addEventListener('click', () => {
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        downloadJson(`retkit-diagnostics-${stamp}.json`, makeReport());
+        let report = null;
+        try { report = makeReport(); } catch (error) { report = { error: String(error?.message || error) }; }
         closePop();
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        try { downloadJson(`retkit-diagnostics-${stamp}.json`, report); } catch (error) { console.error('[RetKit] download failed', error); }
       });
       document.body.appendChild(pop);
     });

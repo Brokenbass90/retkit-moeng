@@ -38,6 +38,8 @@ assert.equal(core.resolveActiveLocale('<html lang="en">', '', 'Default'), 'EN');
 // Вкладка отстала после перерисовки, HTML уже другого языка — верим HTML и
 // приводим к точной вкладке.
 assert.equal(core.resolveActiveLocale('<html lang="vi">', '', 'Default'), 'VI');
+// Чужой lang во вкладке es_ES (письмо скопировали из французской) — вкладка главнее.
+assert.equal(core.resolveActiveLocale('<html lang="fr">', '', 'es_ES'), 'ES_ES');
 assert.equal(core.matchLocaleToTabs('VI', ['EN', 'VI_VN', 'AR_KW']), 'VI_VN');
 assert.equal(core.matchLocaleToTabs('EN', ['EN', 'EN_US']), 'EN', 'Default stays Default');
 

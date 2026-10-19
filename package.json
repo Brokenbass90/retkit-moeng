@@ -1,6 +1,6 @@
 {
   "name": "retkit-moengage",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "private": false,
   "description": "RetKit userscript for faster HTML email work inside MoEngage.",
   "license": "MIT",

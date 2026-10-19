@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.10
+// @version      0.8.11
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -116,7 +116,12 @@
     // Шаблон часто оставляет lang="en" во всех локалях: так вкладка ar_KW
     // показывалась в RetKit как EN. Английский lang вкладку не перебивает.
     if (localeLanguage(htmlLocale) === 'EN') return native;
-    // Иной язык в HTML — вкладка MoEngage отстала после перерисовки.
+    // Выбрана конкретная (не английская) вкладка — она и есть правда. lang в
+    // HTML бывает чужим: письмо скопировали из французской локали в испанскую.
+    // Раньше RetKit тогда считал себя во французской, и клик по fr_FR не
+    // делал ничего («уже открыта») — человек оставался на испанской.
+    if (localeLanguage(native) !== 'EN') return native;
+    // Вкладка Default/EN могла отстать после перерисовки — верим HTML.
     return displayLocale(htmlLocale);
   }
 
@@ -1020,7 +1025,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.10');
+    setTextContentIfChanged(version, 'v0.8.11');
     return true;
   }
 
@@ -2147,8 +2152,8 @@
   async function switchNativeLocale(target, options = {}) {
     const locale = displayLocale(target);
     if (!locale) return { ok: false, reason: 'Locale is empty' };
-    const preferNative = options.rebind === false || options.preferNative === true;
-    const current = preferNative ? (getNativeSelectedLocale() || getNativeEditorLocale() || getActiveLocale()) : getActiveLocale();
+    // Текущая локаль — это выбранная вкладка MoEngage; lang в HTML не решает.
+    const current = getNativeSelectedLocale() || getActiveLocale();
     if (current === locale) {
       if (options.rebind !== false) await rebindWorkspaceAfterLocaleChange(locale);
       return { ok: true, reason: 'Already active' };
@@ -2208,20 +2213,38 @@
     // Bind RetKit only to the editor that really shows the new locale —
     // binding to the previous locale's editor is how one locale's HTML got
     // shown (and then saved) under another locale's tab.
-    try { await waitForLocaleContent(wanted, { timeoutMs: 8000 }); } catch {}
-
+    // waitForLocaleContent already proves the editor switched (new instance or
+    // new value, then stable). <html lang> is NOT proof either way: templates
+    // keep one lang for every locale, people paste a Spanish email into the
+    // French tab, and lang="fr" vs FR_FR never matched literally. Rejecting by
+    // lang is what left RetKit on ES while MoEngage was already on FR.
+    let settled = null;
+    let settleError = '';
+    try { settled = await waitForLocaleContent(wanted, { timeoutMs: 8000 }); } catch (error) { settleError = String(error?.message || error); }
+    const sameLanguage = (a, b) => localeLanguage(a) === localeLanguage(b);
+    let lastReason = '';
+    let lastLang = '';
     for (const delay of [60, 120, 220, 360, 600, 900, 1400]) {
       await wait(delay);
       const workspace = document.getElementById(IDS.workspace);
       const nativeNode = [...document.querySelectorAll('.CodeMirror')].find((node) => !workspace?.contains(node) && node?.CodeMirror);
       const native = nativeNode?.CodeMirror || null;
-      const nativeLocale = displayLocale(localeFromHtml(native?.getValue?.() || ''));
-      if (wanted && nativeLocale && nativeLocale !== wanted) continue;
+      if (!native) { lastReason = 'no MoEngage code editor on the page'; continue; }
+      lastLang = displayLocale(localeFromHtml(native.getValue?.() || ''));
+      // Only when we could not see the switch settle do we fall back to lang,
+      // and then by language (FR = FR_FR), never letter-for-letter.
+      if (!settled && wanted && lastLang && !sameLanguage(lastLang, wanted) && delay < 1400) { lastReason = `editor still shows ${lastLang}`; continue; }
       if (base.rebindNativeEditorFromMoEngage({ preserveCursor: false })) {
         syncSubjectFromMoEngage(true);
+        diagBreadcrumb('locale.bound', { locale: wanted, settled: Boolean(settled?.confirmed), lang: lastLang });
         return true;
       }
+      lastReason = 'RetKit could not attach to the MoEngage editor';
     }
+    diagIncident('locale_bind_failed', `RetKit could not bind the ${wanted} editor`, {
+      locale: wanted, selectedTab: getNativeSelectedLocale() || '', htmlLang: lastLang,
+      settled: Boolean(settled), confirmed: Boolean(settled?.confirmed), settleError, reason: lastReason,
+    });
     return false;
   }
 
@@ -2388,7 +2411,8 @@
       tab.textContent = localeUiLabel(locale);
       tab.title = `Switch MoEngage to ${locale}`;
       tab.addEventListener('click', async () => {
-        if (locale === getActiveLocale()) return;
+        // Сравниваем с реально выбранной вкладкой MoEngage, а не с догадкой по lang.
+        if (locale === (getNativeSelectedLocale() || getActiveLocale())) return;
         tab.disabled = true;
         setLocaleLoading(locale, true);
         workspaceStatus(`Switching MoEngage to ${locale}…`, 'neutral');
@@ -2400,14 +2424,22 @@
             diagBreadcrumb('locale.switch.blocked', { from: getActiveLocale(), to: locale });
             return;
           }
+          const from = getActiveLocale();
+          diagBreadcrumb('locale.switch.start', { from, to: locale });
           const result = await switchNativeLocale(locale);
+          diagBreadcrumb(result.ok ? 'locale.switch.done' : 'locale.switch.failed', { from, to: locale, reason: result.reason || '' });
           if (result.ok) {
             workspaceStatus(`MoEngage locale: ${locale}`, 'ok');
             renderLocaleStrip(true);
             updateLocaleUi(false);
             syncSubjectFromMoEngage(true);
           } else {
-            workspaceStatus(result.reason, 'error');
+            if (!/could not bind/.test(result.reason || '')) diagIncident('locale_switch_failed', result.reason || `Switch to ${locale} failed`, { from, to: locale });
+            // Не оставляем RetKit показывать одну локаль, когда MoEngage уже
+            // на другой: перерисовываем вкладки по тому, что реально открыто.
+            renderLocaleStrip(true);
+            updateLocaleUi(false);
+            workspaceStatus(`${result.reason}. Нажмите вкладку ${locale} ещё раз; если повторится — скачайте Logs.`, 'error');
           }
         } finally {
           setLocaleLoading(locale, false);
@@ -3911,7 +3943,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.10' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.11' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -3937,7 +3969,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.10 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.11 loaded');
   }
 
   bootBridge();
