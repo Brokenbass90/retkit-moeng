@@ -176,9 +176,13 @@
 
     function getBreadcrumbs() { return breadcrumbs.map((item) => ({ ...item, meta: sanitizeMeta(item.meta) })); }
     function getIncidents() { return trimToLimits(readIncidents()); }
+    // Отчёты об успешной работе (массовая замена прошла и проверена) хранятся
+    // как доказательство, но тревогой не считаются: ⚠ на кнопке — только сбои.
+    const INFO_TYPES = new Set(['multilocale_apply_report', 'original_restored']);
     function getSummary() {
       const incidents = getIncidents();
-      return { count: incidents.length, latest: incidents.at(-1) || null };
+      const problems = incidents.filter((item) => !INFO_TYPES.has(item.type));
+      return { count: problems.length, reports: incidents.length - problems.length, total: incidents.length, latest: problems.at(-1) || null };
     }
     function clear() {
       try { storage?.removeItem?.(key); } catch {}
@@ -250,6 +254,7 @@
     const renderBadge = (summary) => {
       const count = Number(summary?.count || 0);
       button.textContent = count ? `⚠ Logs ${count}` : '✓ Logs';
+      button.title = `${count} problem(s)` + (summary?.reports ? ` · ${summary.reports} report(s) of successful bulk work` : '');
       button.classList.toggle('rk-active', count > 0);
     };
     try { uiUnsubscribe?.(); } catch {}
@@ -265,7 +270,7 @@
       pop.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px"><strong>Diagnostics</strong><button data-close style="border:0;background:transparent;color:#9fb0c4;font-size:18px;cursor:pointer">×</button></div>
         <div style="color:#8fa2b8;margin-bottom:10px">Only anomalies are stored. Normal editor events are kept briefly as context.</div>
-        <div style="margin-bottom:10px"><b>${summary.count}</b> incident(s) retained · auto-clean after 7 days</div>
+        <div style="margin-bottom:10px"><b>${summary.count}</b> problem(s)${summary.reports ? ` · ${summary.reports} success report(s)` : ""} · auto-clean after 7 days</div>
         <div data-recent style="display:grid;gap:5px;margin-bottom:10px"></div>
         <div data-fmap style="padding:7px;border:1px solid #263140;border-radius:7px;background:#0c141f;color:#aebdd0;margin-bottom:10px"></div>
         <label style="display:flex;gap:7px;align-items:center;margin-bottom:10px"><input type="checkbox" data-html> Include current HTML in exported report</label>
