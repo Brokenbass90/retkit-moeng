@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.12
+
+- Fewer false alarms in Logs: clearing the editor yourself (select all → delete before pasting) no longer records `empty_body_blocked` — RetKit just says "paste the new email"; MoEngage keeps the old one meanwhile.
+- An empty MoEngage locale (417-byte skeleton) no longer records `preview_not_ready`.
+
 ## 0.8.11
 
 - Locale switch fixed: when an email's `<html lang>` named another language than its tab (a French email pasted into es_ES), RetKit took itself for that language — the fr_FR click did nothing or ended with "could not bind the FR_FR editor". The selected MoEngage tab is now the truth; lang no longer blocks binding.

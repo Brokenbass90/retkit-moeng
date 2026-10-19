@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.11
+// @version      0.8.12
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3212,7 +3212,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.11</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.12</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3237,7 +3237,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.11',
+        version: '0.8.12',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3624,8 +3624,13 @@
       STATE.dirty = false;
       STATE.pendingApply = false;
       diagBreadcrumb('sync.empty-blocked', { revision: startedRevision, nativeLength: nativeHtmlBefore.length });
-      diagIncident('empty_body_blocked', 'RetKit refused to write an email with an empty <body>', { html: next, nativeHtml: nativeHtmlBefore });
-      status('Not saved: this HTML has an empty <body> — MoEngage keeps the current email', 'error');
+      // Человек сам выделил всё и стёр (обычно перед вставкой нового письма) —
+      // это не сбой: защита сработала как надо, в логи это не пишем.
+      const userCleared = /^(\+delete|cut|\*compose|\+input)$/.test(STATE.lastEditOrigin || '') && !String(next).trim();
+      if (!userCleared) diagIncident('empty_body_blocked', 'RetKit refused to write an email with an empty <body>', { html: next, nativeHtml: nativeHtmlBefore });
+      status(userCleared
+        ? 'Editor is empty — paste the new email; MoEngage keeps the current one until then'
+        : 'Not saved: this HTML has an empty <body> — MoEngage keeps the current email', userCleared ? 'neutral' : 'error');
       return false;
     }
     if (shouldSkipNativeCommit({ localHtml: next, nativeHtml: nativeHtmlBefore })) {
@@ -3998,6 +4003,7 @@
       STATE.editRevision = nextEditRevision(STATE.editRevision);
       STATE.dirty = true;
       diagBreadcrumb('editor.change', { revision: STATE.editRevision, origin: change?.origin || '', length: overlay.getValue().length });
+      STATE.lastEditOrigin = String(change?.origin || '');
       if (STATE.applying) STATE.pendingApply = true;
       scheduleFoldRefresh();
       scheduleValidation();
@@ -4147,7 +4153,11 @@
       return;
     }
     if (readiness.mode === 'local-fallback') {
-      diagIncident('preview_not_ready', 'MoEngage preview was not ready; RetKit opened with local HTML preview', { html: native?.getValue?.() || '' });
+      // Пустая локаль MoEngage (скелет без <body>) превью и не даёт — это не
+      // сбой. Пишем инцидент, только если в редакторе есть письмо.
+      const nativeValue = native?.getValue?.() || '';
+      if (htmlBodyHasContent(nativeValue)) diagIncident('preview_not_ready', 'MoEngage preview was not ready; RetKit opened with local HTML preview', { html: nativeValue });
+      else diagBreadcrumb('preview.empty-locale', { length: nativeValue.length });
     }
 
     STATE.nativeEditor = native;
@@ -4389,7 +4399,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.11 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.12 loaded');
   }
 
   boot();
@@ -6139,7 +6149,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.11',
+          clientVersion: '0.8.12',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8671,7 +8681,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.11');
+    setTextContentIfChanged(version, 'v0.8.12');
     return true;
   }
 
@@ -11589,7 +11599,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.11' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.12' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -11615,7 +11625,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.11 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.12 loaded');
   }
 
   bootBridge();
