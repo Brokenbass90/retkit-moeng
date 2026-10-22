@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.13
+
+- Replace across locales no longer skips ES_ES and FR_FR with "MoEngage did not render … after the locale click". The active tab of a removable locale reads as `fr_FR close` (Material Icons ligature of its delete icon), so RetKit did not recognise the open locale. Icon words are now ignored when reading locale tabs.
+
 ## 0.8.12
 
 - Fewer false alarms in Logs: clearing the editor yourself (select all → delete before pasting) no longer records `empty_body_blocked` — RetKit just says "paste the new email"; MoEngage keeps the old one meanwhile.

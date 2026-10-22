@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.12
+// @version      0.8.13
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3217,7 +3217,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.12</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.13</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3242,7 +3242,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.12',
+        version: '0.8.13',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4404,7 +4404,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.12 loaded');
+    console.log('[RetKit] MoEngage workspace v0.8.13 loaded');
   }
 
   boot();
@@ -6154,7 +6154,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.12',
+          clientVersion: '0.8.13',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8168,8 +8168,23 @@ module.exports = { isRtlLocale, applyRtl };
     return displayLocale(raw);
   }
 
+  // У удаляемой локали MoEngage рисует иконку-лигатуру Material Icons, и текст
+  // активной вкладки становится «fr_FR close». Слово иконки к коду не относится:
+  // без этой чистки активная ES/FR-вкладка не узнавалась, и замена по локалям
+  // падала с «MoEngage did not render ES_ES after the locale click».
+  const LOCALE_TAB_ICON_WORD_RE = /\s+(?:close|clear|cancel|delete|delete_outline|remove|remove_circle|edit|more_vert|more_horiz|arrow_drop_down|arrow_drop_up|expand_more|expand_less|check|done|error|warning|info)$/i;
+  function stripLocaleTabIconWords(value) {
+    let text = String(value || '').replace(/\s+/g, ' ').trim();
+    for (let guard = 0; guard < 3; guard += 1) {
+      const next = text.replace(LOCALE_TAB_ICON_WORD_RE, '').trim();
+      if (next === text) break;
+      text = next;
+    }
+    return text;
+  }
+
   function localeCodeFromLabel(value) {
-    const raw = String(value || '').replace(/\s+/g, ' ').trim();
+    const raw = stripLocaleTabIconWords(value);
     if (!raw) return '';
     if (/^(?:add|new|all)$/i.test(raw)) return '';
     if (/^default$/i.test(raw)) return 'EN';
@@ -8566,7 +8581,7 @@ module.exports = { isRtlLocale, applyRtl };
   }
 
   function exactLocaleFromText(value) {
-    const raw = String(value || '').trim();
+    const raw = stripLocaleTabIconWords(value);
     if (/^default$/i.test(raw)) return 'DEFAULT';
     if (/^[a-z]{2,3}(?:[-_][a-z]{2,4})?$/i.test(raw)) return normaliseLocale(raw);
     return '';
@@ -8686,7 +8701,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.12');
+    setTextContentIfChanged(version, 'v0.8.13');
     return true;
   }
 
@@ -11604,7 +11619,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.12' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.8.13' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -11630,7 +11645,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.12 loaded');
+    console.log('[RetKit] MoEngage bridge v0.8.13 loaded');
   }
 
   bootBridge();
