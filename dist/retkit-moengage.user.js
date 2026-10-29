@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.1
+// @version      0.9.2
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3281,7 +3281,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.1</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.2</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3306,7 +3306,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.1',
+        version: '0.9.2',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4527,7 +4527,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.1 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.2 loaded');
   }
 
   boot();
@@ -6304,7 +6304,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.1',
+          clientVersion: '0.9.2',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8780,6 +8780,14 @@ module.exports = { isRtlLocale, applyRtl };
       #${IDS.senderChip}[data-state="empty"] { border-color:#b7791f; color:#f6c76b; background:#2a2112; }
       .rk-sender-field { display:grid; gap:4px; min-width:0; }
       .rk-sender-two { display:grid; grid-template-columns:1fr 1.4fr; gap:8px; }
+      #${IDS.senderPopover} select.rk-v050-select { -webkit-appearance:none; appearance:none; width:100%; min-height:34px; padding:6px 28px 6px 9px; border:1px solid #334155; border-radius:8px; color:#e9eef7; font:500 12px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; cursor:pointer;
+        background:#0b111a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238293a8' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center; text-overflow:ellipsis; }
+      #${IDS.senderPopover} select.rk-v050-select:hover { border-color:#4f7cff; }
+      #${IDS.senderPopover} select.rk-v050-select:focus { outline:none; border-color:#4f7cff; box-shadow:0 0 0 2px rgba(79,124,255,.16); }
+      #${IDS.senderPopover} select.rk-v050-select:disabled { opacity:.55; cursor:default; }
+      #${IDS.senderPopover} select.rk-v050-select option { background:#111823; color:#e9eef7; }
+      #${IDS.senderPopover} .rk-v050-row span { font-size:12px; }
+      #${IDS.senderPopover} input[type="checkbox"] { accent-color:#4f7cff; }
       .rk-sender-static { min-height:34px; display:flex; align-items:center; padding:0 9px; border:1px dashed #334155; border-radius:8px; color:#9fb0c6; font-size:12px; }
       .rk-sender-presets { display:flex; flex-wrap:wrap; gap:6px; }
       .rk-sender-preset { display:inline-flex; align-items:center; gap:4px; border:1px solid #334155; border-radius:14px; background:#172130; color:#dce6f4; padding:4px 6px 4px 10px; font-size:12px; cursor:pointer; }
@@ -8879,7 +8887,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.1');
+    setTextContentIfChanged(version, 'v0.9.2');
     return true;
   }
 
@@ -10553,11 +10561,25 @@ module.exports = { isRtlLocale, applyRtl };
     return cleanDropdownText(textOf(trigger));
   }
 
-  function visibleMdsOptions() {
+  // В списке MoEngage бывают заголовки групп (жирное «Sendgrid» над
+  // «IQOption») — это подпись провайдера, а не вариант.
+  function isMdsGroupHeader(el) {
+    if (!el) return true;
+    if (el.getAttribute?.('aria-disabled') === 'true' || el.hasAttribute?.('disabled')) return true;
+    if (/group|header|heading|title|label|disabled|section/i.test(String(el.className || '').replace(/mds-dropdown__popup__list__item(?!-)/g, ''))) return true;
+    const weight = Number(root.getComputedStyle?.(el)?.fontWeight) || 400;
+    const next = el.nextElementSibling;
+    const nextWeight = next ? (Number(root.getComputedStyle?.(next)?.fontWeight) || 400) : weight;
+    return weight >= 600 && nextWeight < 600;
+  }
+
+  function mdsOptionElements() {
     return [...document.querySelectorAll('.mds-dropdown__popup__list__item')]
-      .filter((el) => !isRetKitElement(el) && isVisible(el))
-      .map((el) => cleanDropdownText(textOf(el)))
-      .filter(Boolean);
+      .filter((el) => !isRetKitElement(el) && isVisible(el) && !isMdsGroupHeader(el));
+  }
+
+  function visibleMdsOptions() {
+    return mdsOptionElements().map((el) => cleanDropdownText(textOf(el))).filter(Boolean);
   }
 
   async function openMdsDropdown(control) {
@@ -10576,7 +10598,7 @@ module.exports = { isRtlLocale, applyRtl };
   }
 
   async function closeMdsDropdown(control) {
-    if (!visibleMdsOptions().length) return;
+    if (!document.querySelector('.mds-dropdown__popup__list__item')) return;
     try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch {}
     await wait(80);
     // Клик «мимо» закрывает выпадашки MDS; повторный клик по ним — последнее средство.
@@ -10605,8 +10627,7 @@ module.exports = { isRtlLocale, applyRtl };
     if (!control) return { ok: false, reason: `${label} dropdown not found` };
     if (dropdownValue(control) === wanted) return { ok: true, changed: false };
     if (!(await openMdsDropdown(control))) return { ok: false, reason: `${label} dropdown did not open` };
-    const item = [...document.querySelectorAll('.mds-dropdown__popup__list__item')]
-      .find((el) => !isRetKitElement(el) && cleanDropdownText(textOf(el)) === wanted);
+    const item = mdsOptionElements().find((el) => cleanDropdownText(textOf(el)) === wanted);
     if (!item) { await closeMdsDropdown(control); return { ok: false, reason: `${label}: no option “${wanted}”` }; }
     activateNativeControl(item);
     await wait(260);
@@ -10900,10 +10921,12 @@ module.exports = { isRtlLocale, applyRtl };
       try {
         const conn = await readSenderDropdownOptions('connector');
         if (!pop.isConnected) return;
-        setOptions(connectorSel, conn.options, connectorSel.value || conn.value);
+        setOptions(connectorSel, conn.options, conn.value || connectorSel.value);
         const from = await readSenderDropdownOptions('from');
         if (!pop.isConnected) return;
-        setOptions(fromSel, from.options, fromSel.value || from.value);
+        setOptions(fromSel, from.options, from.value || fromSel.value);
+        connectorSel.disabled = conn.options.length <= 1;
+        fromSel.disabled = from.options.length <= 1;
         if (conn.options.length <= 1 && from.options.length <= 1) {
           hint.hidden = false;
           hint.textContent = 'MoEngage offers one connector and one From address for this project.';
@@ -12365,7 +12388,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.1' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.2' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12391,7 +12414,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.1 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.2 loaded');
   }
 
   bootBridge();

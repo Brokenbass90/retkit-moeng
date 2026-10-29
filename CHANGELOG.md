@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2
+
+- Sender window: group headers in MoEngage lists (bold "Sendgrid" above "IQOption") are no longer offered as a connector; the current value is always the selected one; a list with one choice is shown but locked.
+- Dark, styled Connector/From selects that match the rest of RetKit.
+
 ## 0.9.1
 
 - Sender window: Email Connector and From are now choices (read from MoEngage when the window opens) and part of presets. Apply sets Connector first, then From, then the name — in every selected locale.
