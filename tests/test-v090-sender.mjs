@@ -28,7 +28,7 @@ for (const id of ['email-preview-text', 'email-sender-name', 'email-reply-addres
 assert.equal(api.cleanDropdownText('noreply@iqoption.comarrow_drop_up'), 'noreply@iqoption.com');
 
 const p = api.normaliseSenderPreset({ senderName: '  IQ Option ', replySame: true, replyTo: 'x@y.z' });
-assert.deepEqual(JSON.parse(JSON.stringify(p)), { name: 'IQ Option', senderName: 'IQ Option', replyTo: '', replySame: true }, 'reply-to dropped when same as From');
+assert.deepEqual(JSON.parse(JSON.stringify(p)), { name: 'IQ Option', senderName: 'IQ Option', replyTo: '', replySame: true, connector: '', fromEmail: '' }, 'reply-to dropped when same as From');
 
 const store = api.normaliseSenderPresets({ presets: [{ senderName: 'IQ Option' }, { name: 'iq option', senderName: 'dup' }, { senderName: '' }, { name: 'Broker', senderName: 'IQ Broker', replySame: false, replyTo: 'help@iqbroker.com' }], last: 'Broker' });
 assert.deepEqual(store.presets.map((x) => x.name), ['IQ Option', 'Broker'], 'dedupe by name, skip empty');
@@ -56,4 +56,10 @@ const row = between(bridge, "      input.addEventListener('change', () => commit
 assert.match(row, /subjectRow\.append\(label, input, preLabel, pre, chip\)/);
 assert.match(between(bridge, '  function syncSubjectFromMoEngage(', '  function syncSubjectOnlyFromMoEngage('), /syncPreheaderFromMoEngage[\s\S]*paintSenderChip/, 'heartbeat keeps preheader and chip in sync');
 
+// v0.9.1: Connector и From — выбор, пишется раньше имени.
+assert.deepEqual([...api.senderChangesNeeded({ senderName: 'IQ Option', replySame: true, connector: 'IQOption', fromEmail: 'noreply@iqoption.com' }, { senderName: 'IQ Option', connector: 'IQBroker', fromEmail: 'noreply@iqbroker.com' })], ['connector', 'fromEmail']);
+assert.ok(write.indexOf("selectSenderDropdown('connector'") < write.indexOf("selectSenderDropdown('from'"), 'connector before From');
+assert.ok(write.indexOf("selectSenderDropdown('from'") < write.indexOf("findNativeField('senderName')"), 'From before sender name');
+const bridgeClient = fs.readFileSync(new URL('../src/ai/client/bridge-client.js', import.meta.url), 'utf8');
+assert.match(bridgeClient, /!hadSuccessfulConnection && reconnectAttempt >= IDLE_ATTEMPTS/, 'no endless reconnects to a bridge that never answered');
 console.log('✓ v0.9.0: preheader + sender presets + apply to all locales');

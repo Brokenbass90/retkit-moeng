@@ -68,8 +68,34 @@
       reconnectTimer = null;
     }
 
+    // Мост (npm run bridge) запускают не всегда. Каждая попытка к закрытому
+    // порту — красная строка «WebSocket connection failed» в консоли, и раньше
+    // они шли без конца раз в 8 с. Если мост ни разу не отвечал — три попытки,
+    // дальше ждём: клик по Claude/Codex (connect()) или возврат на вкладку
+    // не чаще раза в минуту.
+    const IDLE_ATTEMPTS = 3;
+    let parked = false;
+    let lastWake = 0;
+    const wake = () => {
+      if (!parked || !desired || Date.now() - lastWake < 60000) return;
+      lastWake = Date.now();
+      parked = false;
+      reconnectAttempt = 0;
+      connect();
+    };
+    try {
+      root.addEventListener?.('focus', wake);
+      root.document?.addEventListener?.('visibilitychange', () => { if (!root.document.hidden) wake(); });
+    } catch {}
+
     function scheduleReconnect() {
       if (!desired || reconnectTimer) return;
+      if (!hadSuccessfulConnection && reconnectAttempt >= IDLE_ATTEMPTS) {
+        parked = true;
+        lastWake = Date.now();
+        notifyState({ status: 'offline', detail: 'bridge not running' });
+        return;
+      }
       const delay = reconnectDelay(reconnectAttempt++);
       reconnectTimer = root.setTimeout?.(() => {
         reconnectTimer = null;
@@ -79,6 +105,7 @@
 
     function connect() {
       desired = true;
+      parked = false;
       clearReconnect();
       if (socket && (socket.readyState === 0 || socket.readyState === 1)) return;
       if (typeof root.WebSocket !== 'function') {
@@ -101,7 +128,7 @@
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.0',
+          clientVersion: '0.9.1',
         });
         socket.send(JSON.stringify(hello));
       });

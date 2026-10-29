@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1
+
+- Sender window: Email Connector and From are now choices (read from MoEngage when the window opens) and part of presets. Apply sets Connector first, then From, then the name — in every selected locale.
+- The AI bridge no longer floods the console with "WebSocket connection failed" when it is not running: 3 attempts, then it waits for a click on Claude/Codex or for you to come back to the tab (at most once a minute).
+
+## 0.9.0
+
+- Preheader field and a sender chip next to Subject; sender presets; apply sender to all locales with a per-locale report.
+
 ## 0.8.14
 
 - One locale's HTML is never written into another. Before each write RetKit checks that MoEngage still shows the locale it loaded (tab and text). If MoEngage has switched under it (e.g. AR opened while the overlay still held EN), the write is refused (`write_blocked_other_locale` in Logs, with the HTML), the edit goes to the clipboard and RetKit reloads the locale MoEngage really shows.

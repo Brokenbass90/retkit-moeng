@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.0
+// @version      0.9.1
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3281,7 +3281,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3306,7 +3306,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.0',
+        version: '0.9.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4527,7 +4527,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.1 loaded');
   }
 
   boot();
@@ -6244,8 +6244,34 @@ module.exports = { isRtlLocale, applyRtl };
       reconnectTimer = null;
     }
 
+    // Мост (npm run bridge) запускают не всегда. Каждая попытка к закрытому
+    // порту — красная строка «WebSocket connection failed» в консоли, и раньше
+    // они шли без конца раз в 8 с. Если мост ни разу не отвечал — три попытки,
+    // дальше ждём: клик по Claude/Codex (connect()) или возврат на вкладку
+    // не чаще раза в минуту.
+    const IDLE_ATTEMPTS = 3;
+    let parked = false;
+    let lastWake = 0;
+    const wake = () => {
+      if (!parked || !desired || Date.now() - lastWake < 60000) return;
+      lastWake = Date.now();
+      parked = false;
+      reconnectAttempt = 0;
+      connect();
+    };
+    try {
+      root.addEventListener?.('focus', wake);
+      root.document?.addEventListener?.('visibilitychange', () => { if (!root.document.hidden) wake(); });
+    } catch {}
+
     function scheduleReconnect() {
       if (!desired || reconnectTimer) return;
+      if (!hadSuccessfulConnection && reconnectAttempt >= IDLE_ATTEMPTS) {
+        parked = true;
+        lastWake = Date.now();
+        notifyState({ status: 'offline', detail: 'bridge not running' });
+        return;
+      }
       const delay = reconnectDelay(reconnectAttempt++);
       reconnectTimer = root.setTimeout?.(() => {
         reconnectTimer = null;
@@ -6255,6 +6281,7 @@ module.exports = { isRtlLocale, applyRtl };
 
     function connect() {
       desired = true;
+      parked = false;
       clearReconnect();
       if (socket && (socket.readyState === 0 || socket.readyState === 1)) return;
       if (typeof root.WebSocket !== 'function') {
@@ -6277,7 +6304,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.0',
+          clientVersion: '0.9.1',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8751,7 +8778,8 @@ module.exports = { isRtlLocale, applyRtl };
       #${IDS.senderChip}:hover { border-color:#4f7cff; }
       #${IDS.senderChip} .rk-sender-mail { color:#7d8ea5; font-weight:500; overflow:hidden; text-overflow:ellipsis; }
       #${IDS.senderChip}[data-state="empty"] { border-color:#b7791f; color:#f6c76b; background:#2a2112; }
-      .rk-sender-field { display:grid; gap:4px; }
+      .rk-sender-field { display:grid; gap:4px; min-width:0; }
+      .rk-sender-two { display:grid; grid-template-columns:1fr 1.4fr; gap:8px; }
       .rk-sender-static { min-height:34px; display:flex; align-items:center; padding:0 9px; border:1px dashed #334155; border-radius:8px; color:#9fb0c6; font-size:12px; }
       .rk-sender-presets { display:flex; flex-wrap:wrap; gap:6px; }
       .rk-sender-preset { display:inline-flex; align-items:center; gap:4px; border:1px solid #334155; border-radius:14px; background:#172130; color:#dce6f4; padding:4px 6px 4px 10px; font-size:12px; cursor:pointer; }
@@ -8851,7 +8879,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.0');
+    setTextContentIfChanged(version, 'v0.9.1');
     return true;
   }
 
@@ -10496,10 +10524,101 @@ module.exports = { isRtlLocale, applyRtl };
     return String(value || '').replace(/arrow_drop_(?:down|up)/g, '').replace(/\s+/g, ' ').trim();
   }
 
+  // «Email Connector» без своего data-testid: ищем выпадающий список MDS
+  // рядом с подписью, но не тот, что From.
+  function findConnectorDropdown() {
+    const from = findNativeField('fromEmail');
+    const labels = [...document.querySelectorAll('label,span,div,p')]
+      .filter((el) => !isRetKitElement(el) && /^Email\s*Connector\s*\*?/i.test(textOf(el)) && textOf(el).length < 40)
+      .sort((a, c) => a.querySelectorAll('*').length - c.querySelectorAll('*').length);
+    for (const label of labels) {
+      for (let box = label.parentElement, depth = 0; box && depth < 5; box = box.parentElement, depth += 1) {
+        const found = [...box.querySelectorAll('.mds-dropdown, [class*="mds-dropdown__trigger"]')]
+          .find((el) => !from || (!el.contains(from) && !from.contains(el)));
+        if (found) return found.closest('.mds-dropdown') || found;
+      }
+    }
+    return null;
+  }
+
+  function senderDropdown(kind) {
+    if (kind === 'connector') return findConnectorDropdown();
+    const trigger = findNativeField('fromEmail');
+    return trigger?.closest?.('.mds-dropdown') || trigger || null;
+  }
+
+  function dropdownValue(control) {
+    if (!control) return '';
+    const trigger = control.querySelector?.('.mds-dropdown__trigger') || control;
+    return cleanDropdownText(textOf(trigger));
+  }
+
+  function visibleMdsOptions() {
+    return [...document.querySelectorAll('.mds-dropdown__popup__list__item')]
+      .filter((el) => !isRetKitElement(el) && isVisible(el))
+      .map((el) => cleanDropdownText(textOf(el)))
+      .filter(Boolean);
+  }
+
+  async function openMdsDropdown(control) {
+    activateMdsDropdown(control);
+    for (let i = 0; i < 10; i += 1) {
+      await wait(70);
+      if (visibleMdsOptions().length) return true;
+    }
+    const host = mdsDropdownHost(control);
+    if (host) invokeReactHandler(host, 'onMouseDown', dropdownClickable(control) || control);
+    for (let i = 0; i < 10; i += 1) {
+      await wait(70);
+      if (visibleMdsOptions().length) return true;
+    }
+    return false;
+  }
+
+  async function closeMdsDropdown(control) {
+    if (!visibleMdsOptions().length) return;
+    try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch {}
+    await wait(80);
+    // Клик «мимо» закрывает выпадашки MDS; повторный клик по ним — последнее средство.
+    if (visibleMdsOptions().length) {
+      try { document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); document.body.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch {}
+      await wait(80);
+    }
+    if (visibleMdsOptions().length) activateMdsDropdown(control);
+    await wait(80);
+  }
+
+  /** Варианты выпадающего списка MoEngage: открыть, прочитать, закрыть. */
+  async function readSenderDropdownOptions(kind) {
+    const control = senderDropdown(kind);
+    if (!control) return { value: '', options: [] };
+    const value = dropdownValue(control);
+    if (!(await openMdsDropdown(control))) return { value, options: value ? [value] : [] };
+    const options = [...new Set(visibleMdsOptions())];
+    await closeMdsDropdown(control);
+    return { value, options: options.length ? options : (value ? [value] : []) };
+  }
+
+  async function selectSenderDropdown(kind, wanted) {
+    const control = senderDropdown(kind);
+    const label = kind === 'connector' ? 'Email Connector' : 'From email';
+    if (!control) return { ok: false, reason: `${label} dropdown not found` };
+    if (dropdownValue(control) === wanted) return { ok: true, changed: false };
+    if (!(await openMdsDropdown(control))) return { ok: false, reason: `${label} dropdown did not open` };
+    const item = [...document.querySelectorAll('.mds-dropdown__popup__list__item')]
+      .find((el) => !isRetKitElement(el) && cleanDropdownText(textOf(el)) === wanted);
+    if (!item) { await closeMdsDropdown(control); return { ok: false, reason: `${label}: no option “${wanted}”` }; }
+    activateNativeControl(item);
+    await wait(260);
+    const now = dropdownValue(senderDropdown(kind));
+    return now === wanted ? { ok: true, changed: true } : { ok: false, reason: `${label} stayed “${now}”` };
+  }
+
   function readNativeSender() {
     const sameBox = findNativeField('replySame');
     return {
       found: Boolean(findNativeField('senderName')),
+      connector: dropdownValue(senderDropdown('connector')),
       senderName: readNativeValue(findNativeField('senderName')).trim(),
       fromEmail: cleanDropdownText(textOf(findNativeField('fromEmail'))),
       replyTo: readNativeValue(findNativeField('replyTo')).trim(),
@@ -10512,7 +10631,9 @@ module.exports = { isRtlLocale, applyRtl };
     const replyTo = String(value.replyTo ?? '').trim().slice(0, 200);
     const replySame = value.replySame !== false;
     const name = String(value.name ?? '').trim().slice(0, 40) || senderName;
-    return { name, senderName, replyTo: replySame ? '' : replyTo, replySame };
+    const connector = String(value.connector ?? '').trim().slice(0, 120);
+    const fromEmail = String(value.fromEmail ?? '').trim().slice(0, 200);
+    return { name, senderName, replyTo: replySame ? '' : replyTo, replySame, connector, fromEmail };
   }
 
   function normaliseSenderPresets(value) {
@@ -10544,6 +10665,8 @@ module.exports = { isRtlLocale, applyRtl };
   function senderChangesNeeded(current = {}, desired = {}) {
     const want = normaliseSenderPreset(desired);
     const changes = [];
+    if (want.connector && String(current.connector || '').trim() !== want.connector) changes.push('connector');
+    if (want.fromEmail && String(current.fromEmail || '').trim() !== want.fromEmail) changes.push('fromEmail');
     if (want.senderName && String(current.senderName || '').trim() !== want.senderName) changes.push('senderName');
     if (Boolean(current.replySame) !== want.replySame) changes.push('replySame');
     if (!want.replySame && want.replyTo && String(current.replyTo || '').trim() !== want.replyTo) changes.push('replyTo');
@@ -10551,8 +10674,9 @@ module.exports = { isRtlLocale, applyRtl };
   }
 
   function senderSummary(value = {}) {
-    const name = String(value.senderName || '').trim();
-    return name || '—';
+    const name = String(value.senderName || '').trim() || '—';
+    const from = String(value.fromEmail || '').trim();
+    return from ? `${name} <${from}>` : name;
   }
 
   async function waitForNativeField(key, timeoutMs = 1600) {
@@ -10581,6 +10705,15 @@ module.exports = { isRtlLocale, applyRtl };
     const before = readNativeSender();
     const changes = senderChangesNeeded(before, want);
     if (!changes.length) return { ok: true, changed: false, before, after: before };
+    if (changes.includes('connector')) {
+      const picked = await selectSenderDropdown('connector', want.connector);
+      if (!picked.ok) return { ok: false, reason: picked.reason, before, after: readNativeSender() };
+      await wait(300);
+    }
+    if (want.fromEmail && readNativeSender().fromEmail !== want.fromEmail) {
+      const picked = await selectSenderDropdown('from', want.fromEmail);
+      if (!picked.ok) return { ok: false, reason: picked.reason, before, after: readNativeSender() };
+    }
     if (changes.includes('senderName')) {
       const field = findNativeField('senderName');
       setNativeValue(field, want.senderName);
@@ -10712,7 +10845,11 @@ module.exports = { isRtlLocale, applyRtl };
       <div class="rk-v050-grid">
         <div class="rk-sender-presets" data-presets></div>
         <label class="rk-sender-field"><span class="rk-v050-hint">Sender name</span><input class="rk-v050-input" data-sender-name autocomplete="off" spellcheck="false" placeholder="IQ Option"></label>
-        <div class="rk-sender-field"><span class="rk-v050-hint">From · chosen in MoEngage (Email Connector)</span><div class="rk-sender-static" data-from></div></div>
+        <div class="rk-sender-two">
+          <label class="rk-sender-field"><span class="rk-v050-hint">Email Connector</span><select class="rk-v050-select" data-connector></select></label>
+          <label class="rk-sender-field"><span class="rk-v050-hint">From</span><select class="rk-v050-select" data-from></select></label>
+        </div>
+        <div class="rk-v050-hint" data-dd-hint hidden></div>
         <div class="rk-sender-field">
           <label class="rk-v050-row"><input type="checkbox" data-reply-same> <span>Reply-to same as From</span></label>
           <input class="rk-v050-input" data-reply-to autocomplete="off" spellcheck="false" placeholder="reply@…">
@@ -10740,8 +10877,47 @@ module.exports = { isRtlLocale, applyRtl };
       replyInput.value = value.replySame !== false ? '' : (value.replyTo || '');
       replyInput.hidden = sameBox.checked;
     };
+    const connectorSel = $('[data-connector]');
+    const fromSel = $('[data-from]');
+    const setOptions = (select, options, value) => {
+      const list = [...new Set([value, ...options].filter(Boolean))];
+      select.replaceChildren(...list.map((text) => { const o = document.createElement('option'); o.value = text; o.textContent = text; return o; }));
+      if (!list.length) { const o = document.createElement('option'); o.value = ''; o.textContent = '—'; select.appendChild(o); }
+      select.value = value || list[0] || '';
+    };
+    setOptions(connectorSel, [], start.connector || current.connector);
+    setOptions(fromSel, [], start.fromEmail || current.fromEmail);
+    const fillBase = fill;
+    const fillAll = (value) => {
+      fillBase(value);
+      if (value.connector) setOptions(connectorSel, [...connectorSel.options].map((o) => o.value), value.connector);
+      if (value.fromEmail) setOptions(fromSel, [...fromSel.options].map((o) => o.value), value.fromEmail);
+    };
     fill(start);
-    $('[data-from]').textContent = current.fromEmail || '—';
+    // Списки MoEngage читаем один раз при открытии окна: открыть, прочитать, закрыть.
+    (async () => {
+      const hint = $('[data-dd-hint]');
+      try {
+        const conn = await readSenderDropdownOptions('connector');
+        if (!pop.isConnected) return;
+        setOptions(connectorSel, conn.options, connectorSel.value || conn.value);
+        const from = await readSenderDropdownOptions('from');
+        if (!pop.isConnected) return;
+        setOptions(fromSel, from.options, fromSel.value || from.value);
+        if (conn.options.length <= 1 && from.options.length <= 1) {
+          hint.hidden = false;
+          hint.textContent = 'MoEngage offers one connector and one From address for this project.';
+        }
+      } catch (error) {
+        hint.hidden = false;
+        hint.textContent = `Could not read MoEngage lists: ${error?.message || error}`;
+      }
+    })();
+    connectorSel.addEventListener('change', () => {
+      const hint = $('[data-dd-hint]');
+      hint.hidden = false;
+      hint.textContent = 'From list depends on the connector — it is refreshed after Apply.';
+    });
     sameBox.addEventListener('change', () => { replyInput.hidden = sameBox.checked; });
 
     const available = discoverNativeLocales();
@@ -10762,7 +10938,7 @@ module.exports = { isRtlLocale, applyRtl };
     $('[data-current]').addEventListener('click', () => setLocales(active ? [active] : []));
     $('[data-all]').addEventListener('click', () => setLocales(ordered));
 
-    const desired = () => normaliseSenderPreset({ senderName: nameInput.value, replySame: sameBox.checked, replyTo: replyInput.value });
+    const desired = () => normaliseSenderPreset({ senderName: nameInput.value, replySame: sameBox.checked, replyTo: replyInput.value, connector: connectorSel.value, fromEmail: fromSel.value });
     const paintPresets = () => {
       const box = $('[data-presets]');
       box.replaceChildren();
@@ -10778,7 +10954,7 @@ module.exports = { isRtlLocale, applyRtl };
         const chip = document.createElement('span');
         chip.className = 'rk-sender-preset';
         chip.dataset.active = String(!senderChangesNeeded(now, preset).length && now.senderName === preset.senderName);
-        chip.title = `${preset.senderName} · reply-to ${preset.replySame ? 'same as From' : preset.replyTo}`;
+        chip.title = `${preset.senderName}${preset.fromEmail ? ` <${preset.fromEmail}>` : ''}${preset.connector ? ` · ${preset.connector}` : ''} · reply-to ${preset.replySame ? 'same as From' : preset.replyTo}`;
         const label = document.createElement('b');
         label.textContent = preset.name;
         const del = document.createElement('button');
@@ -10792,7 +10968,7 @@ module.exports = { isRtlLocale, applyRtl };
         });
         chip.append(label, del);
         chip.addEventListener('click', () => {
-          fill(preset);
+          fillAll(preset);
           store = writeSenderPresets({ ...store, last: preset.name });
           paintPresets();
         });
@@ -12189,7 +12365,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.0' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.1' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12215,7 +12391,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.0 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.1 loaded');
   }
 
   bootBridge();
