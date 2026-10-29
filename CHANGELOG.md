@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.14
+
+- One locale's HTML is never written into another. Before each write RetKit checks that MoEngage still shows the locale it loaded (tab and text). If MoEngage has switched under it (e.g. AR opened while the overlay still held EN), the write is refused (`write_blocked_other_locale` in Logs, with the HTML), the edit goes to the clipboard and RetKit reloads the locale MoEngage really shows.
+- Clearing the whole editor now clears the preview too, instead of showing the old email until you type.
+
 ## 0.8.13
 
 - Replace across locales no longer skips ES_ES and FR_FR with "MoEngage did not render … after the locale click". The active tab of a removable locale reads as `fr_FR close` (Material Icons ligature of its delete icon), so RetKit did not recognise the open locale. Icon words are now ignored when reading locale tabs.

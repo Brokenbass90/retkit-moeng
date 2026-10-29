@@ -226,7 +226,7 @@ export class CodexProvider {
     this.rpc.on('closed', () => { this.queue?.end(); this.queue = null; });
 
     await this.rpc.request('initialize', {
-      clientInfo: { name: 'retkit_ai', title: 'RetKit AI Workbench', version: '0.8.13' },
+      clientInfo: { name: 'retkit_ai', title: 'RetKit AI Workbench', version: '0.9.0' },
       capabilities: { experimentalApi: true },
     });
     this.rpc.notify('initialized', {});

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.13
+// @version      0.9.0
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1383,6 +1383,67 @@
     return !htmlBodyHasContent(local) && (htmlBodyHasContent(native) || htmlBodyHasContent(previewHtml));
   }
 
+  // Видимый текст письма — словами, без тегов и стилей.
+  function emailTextWords(html) {
+    const source = String(html ?? '');
+    const match = source.match(/<body\b[^>]*>([\s\S]*?)(?:<\/body>|$)/i);
+    const body = (match ? match[1] : source)
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<(?:script|style)\b[\s\S]*?<\/(?:script|style)>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&[a-z#0-9]+;/gi, ' ')
+      .toLowerCase();
+    return body.split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2);
+  }
+
+  // Доля общих слов (0…1). EN против AR — около 0, та же локаль после
+  // правки или переформатирования MoEngage — около 1.
+  function emailTextSimilarity(a, b) {
+    const left = emailTextWords(a);
+    const right = emailTextWords(b);
+    if (!left.length && !right.length) return 1;
+    if (!left.length || !right.length) return 0;
+    const counts = new Map();
+    for (const word of left) counts.set(word, (counts.get(word) || 0) + 1);
+    let common = 0;
+    for (const word of right) {
+      const n = counts.get(word) || 0;
+      if (n > 0) { common += 1; counts.set(word, n - 1); }
+    }
+    return common / Math.max(left.length, right.length);
+  }
+
+  /**
+   * Можно ли писать правку RetKit в редактор MoEngage прямо сейчас.
+   *
+   * RetKit держит текст той локали, к которой привязан (boundLocale). Если
+   * MoEngage за это время переключился на другую вкладку (клик по вкладке,
+   * поиск по локалям, перерисовка React), запись положила бы, например, EN в
+   * AR — ровно так арабская локаль оказалась английской. Пишем только поверх
+   * того, что видели в этой локали: редактор MoEngage не менялся, или менялся,
+   * но это всё ещё та же вкладка и тот же текст.
+   *
+   * @returns '' — писать можно; иначе причина отказа.
+   */
+  function nativeSwitchedUnderUs({ knownHtml = '', nativeHtml = '', sameAsKnown = false, boundLocale = '', tabLocale = '' } = {}) {
+    if (!knownHtml || sameAsKnown) return '';
+    const bound = String(boundLocale || '').toUpperCase();
+    const tab = String(tabLocale || '').toUpperCase();
+    const lang = (value) => (['DEFAULT'].includes(value) ? 'EN' : value.split('_')[0]);
+    const sameLocale = bound === tab
+      || (lang(bound) === lang(tab) && (!bound.includes('_') || !tab.includes('_')))
+      || (lang(bound) === 'EN' && lang(tab) === 'EN' && (bound === 'DEFAULT' || tab === 'DEFAULT'));
+    if (bound && tab && !sameLocale) {
+      return `MoEngage is on ${tab}, RetKit holds ${bound}`;
+    }
+    const similarity = emailTextSimilarity(knownHtml, nativeHtml);
+    if (similarity < 0.5) {
+      return `MoEngage now shows a different email (${Math.round(similarity * 100)}% same text) — another locale?`;
+    }
+    return '';
+  }
+
   function shouldSkipNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
     // Dirty only means the overlay changed since the last bookkeeping update.
     // Cmd/Ctrl+Z can restore the exact native content while dirty stays true.
@@ -1673,6 +1734,9 @@
     flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
+    // Мост ходит по локалям сам (отправитель на все локали) — на это время
+    // ядро не пишет и не подтягивает HTML, как при замене по локалям.
+    setMultiLocaleBusy: (value, message) => { try { setMultiLocaleBusy(value, message); } catch {} },
   };
 
   root.__RetKitMoEngageCore = core;
@@ -3217,7 +3281,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.13</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.0</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3242,7 +3306,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.13',
+        version: '0.9.0',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3536,11 +3600,32 @@
     }
   }
 
+  // Код стёрли целиком — превью тоже пустое. Раньше справа оставалось старое
+  // письмо, пока не начнёшь печатать: казалось, что стирание не сработало.
+  // MoEngage при этом хранит прежнее письмо (пустое туда не пишется).
+  const EMPTY_PREVIEW_HTML = '<!doctype html><html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:14px/1.4 -apple-system,Segoe UI,sans-serif;color:#8a8f98;background:#fafafa;text-align:center">Editor is empty<br>MoEngage still keeps the saved email until you paste a new one</body></html>';
+
+  function showEmptyPreview() {
+    const frame = document.getElementById(IDS.previewFrame);
+    if (!frame || STATE.previewHtml === EMPTY_PREVIEW_HTML) return;
+    clearTimeout(STATE.previewTimer);
+    STATE.previewTimer = null;
+    STATE.previewPendingHtml = '';
+    STATE.previewHtml = EMPTY_PREVIEW_HTML;
+    frame.onload = () => schedulePreviewResize(frame);
+    frame.srcdoc = EMPTY_PREVIEW_HTML;
+  }
+
+  function overlayIsEmpty() {
+    return !String(STATE.overlayEditor?.getValue?.() ?? 'x').trim();
+  }
+
   function scheduleLocalPreview(html, delay = 140) {
     STATE.previewPendingHtml = String(html || '');
     clearTimeout(STATE.previewTimer);
     STATE.previewTimer = null;
-    if (!STATE.previewPendingHtml || hasBlockingPreviewSyntaxIssue(STATE.previewPendingHtml)) return;
+    if (!STATE.previewPendingHtml.trim()) { showEmptyPreview(); return; }
+    if (hasBlockingPreviewSyntaxIssue(STATE.previewPendingHtml)) return;
     STATE.previewTimer = setTimeout(() => {
       STATE.previewTimer = null;
       const next = STATE.previewPendingHtml;
@@ -3571,6 +3656,8 @@
 
   function refreshPreviewFromMoEngage(force = false) {
     if (!force && STATE.multiLocaleBusy) return;
+    // Пустой редактор — не подменяем пустое превью письмом из MoEngage.
+    if (!force && overlayIsEmpty()) { showEmptyPreview(); return; }
     const html = getRenderedPreviewHtml();
     if (!html) return;
     // While there is unsaved local work, the local iframe is authoritative.
@@ -3650,7 +3737,29 @@
       status('Already in sync', 'ok');
       return true;
     }
-    diagBreadcrumb('sync.start', { revision: startedRevision, length: next.length, force: Boolean(force) });
+    const tabLocale = nativeTabLocale();
+    const switchedReason = nativeSwitchedUnderUs({
+      knownHtml: STATE.knownNativeHtml || '',
+      nativeHtml: nativeHtmlBefore,
+      sameAsKnown: Boolean(STATE.knownNativeHtml) && htmlEquivalentForSync(STATE.knownNativeHtml, nativeHtmlBefore),
+      boundLocale: STATE.boundLocale,
+      tabLocale,
+    });
+    if (switchedReason) {
+      // Правку не теряем: она в инциденте (с HTML) и в буфере обмена. Но в
+      // чужую локаль не пишем ни при каком раскладе.
+      diagIncident('write_blocked_other_locale', `Not written: ${switchedReason}`, {
+        boundLocale: STATE.boundLocale || '', tabLocale, revision: startedRevision, html: next, nativeHtml: nativeHtmlBefore,
+      });
+      try { root.navigator?.clipboard?.writeText?.(next)?.catch?.(() => {}); } catch {}
+      STATE.dirty = false;
+      STATE.pendingApply = false;
+      const lost = STATE.boundLocale || 'previous locale';
+      rebindNativeEditorFromMoEngage({ preserveCursor: false });
+      status(`⚠ Not saved: ${switchedReason}. Your ${lost} edit was NOT written here — it is in the clipboard and in RetKit logs.`, 'error');
+      return false;
+    }
+    diagBreadcrumb('sync.start', { revision: startedRevision, length: next.length, force: Boolean(force), locale: STATE.boundLocale || '', tab: tabLocale });
 
     STATE.applying = true;
     STATE.syncingToNative = true;
@@ -3708,6 +3817,7 @@
       STATE.dirty = false;
       STATE.lastAppliedRevision = startedRevision;
       STATE.lastAppliedAt = Date.now();
+      rememberNativeHtml((getNativeEditor() || native)?.getValue?.() || next);
       const durationMs = STATE.lastAppliedAt - startedAt;
       lastNativeSyncMs = durationMs;
       diagBreadcrumb('sync.done', { revision: startedRevision, durationMs });
@@ -3777,6 +3887,7 @@
     }
     STATE.syncingFromNative = true;
     const cursor = overlay.getCursor();
+    rememberNativeHtml(native.getValue());
     try {
       overlay.setValue(next);
       overlay.setCursor(cursor);
@@ -3835,6 +3946,7 @@
 
     STATE.nativeEditor = nextNative;
     STATE.syncingFromNative = true;
+    rememberNativeHtml(nextNative.getValue());
     try {
       const next = beautifyEmailHtml(nextNative.getValue());
       if (overlay.getValue() !== next) {
@@ -3889,6 +4001,16 @@
     diagIncident('native_empty_body', `MoEngage code view shows an empty <body> for ${locale}; preview still has the email`, { locale, nativeHtml: native, previewLength: preview.length });
     status(`⚠ ${locale}: MoEngage code view came up EMPTY (preview still has the email). Nothing is saved from here — reload the page and reopen ${locale}.`, 'error');
     return true;
+  }
+
+  // Вкладка MoEngage как есть. getActiveLocale смотрит и в текст редактора
+  // RetKit — для проверки «куда пишем» это порочный круг.
+  function nativeTabLocale() {
+    try { return String(root.__RetKitMoEngageBridgeApi?.getNativeTabLocale?.() || '').toUpperCase(); } catch { return ''; }
+  }
+
+  function rememberNativeHtml(html) {
+    STATE.knownNativeHtml = String(html ?? '');
   }
 
   function currentBridgeLocale() {
@@ -4167,6 +4289,7 @@
 
     STATE.nativeEditor = native;
     STATE.boundLocale = currentBridgeLocale();
+    rememberNativeHtml(native.getValue?.() || '');
     setTimeout(() => warnIfNativeBodyEmpty(), 600);
     STATE.previewHtml = '';
     STATE.previewPendingHtml = '';
@@ -4404,7 +4527,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.13 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.0 loaded');
   }
 
   boot();
@@ -6154,7 +6277,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.8.13',
+          clientVersion: '0.9.0',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8321,6 +8444,9 @@ module.exports = { isRtlLocale, applyRtl };
     localeLoading: 'retkit-mo-locale-loading',
     subjectRow: 'retkit-mo-subject-row',
     subjectInput: 'retkit-mo-subject-input',
+    preheaderInput: 'retkit-mo-preheader-input',
+    senderChip: 'retkit-mo-sender-chip',
+    senderPopover: 'retkit-mo-sender-popover',
     rtlButton: 'retkit-mo-rtl-button',
     testButton: 'retkit-mo-test-button',
     originalButton: 'retkit-mo-original-button',
@@ -8335,10 +8461,12 @@ module.exports = { isRtlLocale, applyRtl };
 
   const STORAGE = {
     testPrefs: 'retkit-mo-v050-test-prefs',
+    senderPresets: 'retkit-mo-sender-presets',
   };
 
   let localeTimer = null;
   let subjectTimer = null;
+  let preheaderTimer = null;
   const rtlToggleStates = new Map();
   let nativeLocaleBarCache = null;
 
@@ -8616,6 +8744,28 @@ module.exports = { isRtlLocale, applyRtl };
       #${IDS.subjectRow} { min-height:44px; flex:0 0 44px; display:flex; align-items:center; gap:10px; padding:0 12px; background:#0d141e; border-bottom:1px solid #263140; }
       #${IDS.subjectInput} { flex:1 1 auto; min-width:120px; height:30px; border:1px solid #334155; border-radius:7px; padding:5px 9px; background:#0b111a; color:#e9eef7; outline:none; font:500 12px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
       #${IDS.subjectInput}:focus { border-color:#4f7cff; box-shadow:0 0 0 2px rgba(79,124,255,.16); }
+      #${IDS.subjectInput} { flex:1.4 1 0; }
+      #${IDS.preheaderInput} { flex:1 1 0; min-width:120px; height:30px; border:1px solid #334155; border-radius:7px; padding:5px 9px; background:#0b111a; color:#c9d4e3; outline:none; font:500 12px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      #${IDS.preheaderInput}:focus { border-color:#4f7cff; box-shadow:0 0 0 2px rgba(79,124,255,.16); }
+      #${IDS.senderChip} { flex:0 1 auto; max-width:260px; height:30px; display:inline-flex; align-items:center; gap:6px; border:1px solid #334155; border-radius:15px; padding:0 11px 0 9px; background:#121b28; color:#dce6f4; cursor:pointer; font:600 12px/1 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      #${IDS.senderChip}:hover { border-color:#4f7cff; }
+      #${IDS.senderChip} .rk-sender-mail { color:#7d8ea5; font-weight:500; overflow:hidden; text-overflow:ellipsis; }
+      #${IDS.senderChip}[data-state="empty"] { border-color:#b7791f; color:#f6c76b; background:#2a2112; }
+      .rk-sender-field { display:grid; gap:4px; }
+      .rk-sender-static { min-height:34px; display:flex; align-items:center; padding:0 9px; border:1px dashed #334155; border-radius:8px; color:#9fb0c6; font-size:12px; }
+      .rk-sender-presets { display:flex; flex-wrap:wrap; gap:6px; }
+      .rk-sender-preset { display:inline-flex; align-items:center; gap:4px; border:1px solid #334155; border-radius:14px; background:#172130; color:#dce6f4; padding:4px 6px 4px 10px; font-size:12px; cursor:pointer; }
+      .rk-sender-preset:hover { border-color:#4f7cff; }
+      .rk-sender-preset[data-active="true"] { border-color:#4f7cff; background:#1c2b47; }
+      .rk-sender-preset b { font-weight:600; }
+      .rk-sender-preset button { border:0; background:transparent; color:#6d7f96; cursor:pointer; padding:0 2px; font-size:13px; line-height:1; }
+      .rk-sender-preset button:hover { color:#ff8b8b; }
+      .rk-sender-actions { display:flex; gap:8px; justify-content:flex-end; padding-top:4px; border-top:1px solid #263140; margin-top:2px; }
+      .rk-sender-results { display:grid; gap:3px; font-size:12px; max-height:180px; overflow:auto; }
+      .rk-sender-results div { display:flex; gap:8px; }
+      .rk-sender-results .ok { color:#7ee2a8; }
+      .rk-sender-results .err { color:#ff8b8b; }
+      .rk-sender-results .same { color:#7d8ea5; }
       #${IDS.localeLoading} { position:absolute; inset:52px 0 0; z-index:30; display:grid; place-items:center; background:rgba(13,17,24,.94); color:#dce6f4; font:700 14px/1.3 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; backdrop-filter:blur(1px); }
       .rk-v054-test-locales { display:flex; flex-wrap:wrap; gap:6px; padding:2px 0; }
       .rk-v054-test-locale { display:inline-flex; align-items:center; gap:5px; border:1px solid #334155; border-radius:7px; padding:5px 7px; background:#0b111a; color:#dce6f4; font-size:11px; cursor:pointer; }
@@ -8701,7 +8851,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.8.13');
+    setTextContentIfChanged(version, 'v0.9.0');
     return true;
   }
 
@@ -8717,7 +8867,7 @@ module.exports = { isRtlLocale, applyRtl };
   }
 
   function closeBridgePopovers(except = '') {
-    for (const id of [IDS.testPopover, IDS.originalPopover]) {
+    for (const id of [IDS.testPopover, IDS.originalPopover, IDS.senderPopover]) {
       if (id !== except) document.getElementById(id)?.remove();
     }
   }
@@ -8798,6 +8948,7 @@ module.exports = { isRtlLocale, applyRtl };
     return Boolean(element && (
       document.getElementById(IDS.workspace)?.contains(element) ||
       document.getElementById(IDS.testPopover)?.contains?.(element) ||
+      document.getElementById(IDS.senderPopover)?.contains?.(element) ||
       document.getElementById(IDS.addLocalePopover)?.contains?.(element) ||
       document.getElementById(IDS.localeLoading)?.contains?.(element) ||
       document.getElementById('retkit-mo-launcher')?.contains?.(element)
@@ -10321,7 +10472,404 @@ module.exports = { isRtlLocale, applyRtl };
     return findFieldNearTextLabel(/^Subject\s*\*?$/i);
   }
 
+  // ── Preview text и отправитель ──────────────────────────────────────────
+  // У MoEngage у этих полей стабильные data-testid (проверено разведкой
+  // 2026-10-29): редактируемые div#personalization_container. Ищем по ним.
+  const NATIVE_FIELD_TESTIDS = Object.freeze({
+    preview: 'email-preview-text',
+    senderName: 'email-sender-name',
+    replyTo: 'email-reply-address',
+    replySame: 'reply-email-same-checkbox',
+    replySameControl: 'reply-email-same-checkbox-control',
+    fromEmail: 'from-email-address',
+  });
+
+  function findNativeField(key) {
+    const testid = NATIVE_FIELD_TESTIDS[key];
+    if (!testid) return null;
+    const workspace = document.getElementById(IDS.workspace);
+    const all = [...document.querySelectorAll(`[data-testid="${testid}"]`)].filter((el) => !workspace?.contains(el) && !isRetKitElement(el));
+    return all.find((el) => isVisible(el)) || all[0] || null;
+  }
+
+  function cleanDropdownText(value) {
+    return String(value || '').replace(/arrow_drop_(?:down|up)/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function readNativeSender() {
+    const sameBox = findNativeField('replySame');
+    return {
+      found: Boolean(findNativeField('senderName')),
+      senderName: readNativeValue(findNativeField('senderName')).trim(),
+      fromEmail: cleanDropdownText(textOf(findNativeField('fromEmail'))),
+      replyTo: readNativeValue(findNativeField('replyTo')).trim(),
+      replySame: sameBox ? Boolean(sameBox.checked) : true,
+    };
+  }
+
+  function normaliseSenderPreset(value = {}) {
+    const senderName = String(value.senderName ?? '').trim().slice(0, 120);
+    const replyTo = String(value.replyTo ?? '').trim().slice(0, 200);
+    const replySame = value.replySame !== false;
+    const name = String(value.name ?? '').trim().slice(0, 40) || senderName;
+    return { name, senderName, replyTo: replySame ? '' : replyTo, replySame };
+  }
+
+  function normaliseSenderPresets(value) {
+    const list = Array.isArray(value?.presets) ? value.presets : (Array.isArray(value) ? value : []);
+    const seen = new Set();
+    const presets = [];
+    for (const item of list) {
+      const preset = normaliseSenderPreset(item);
+      if (!preset.senderName || seen.has(preset.name.toLowerCase())) continue;
+      seen.add(preset.name.toLowerCase());
+      presets.push(preset);
+    }
+    const last = String(value?.last || '');
+    return { presets: presets.slice(0, 20), last: presets.some((p) => p.name === last) ? last : (presets[0]?.name || '') };
+  }
+
+  function readSenderPresets() {
+    try { return normaliseSenderPresets(JSON.parse(localStorage.getItem(STORAGE.senderPresets) || '{}')); }
+    catch { return normaliseSenderPresets({}); }
+  }
+
+  function writeSenderPresets(value) {
+    const next = normaliseSenderPresets(value);
+    try { localStorage.setItem(STORAGE.senderPresets, JSON.stringify(next)); } catch {}
+    return next;
+  }
+
+  /** Что надо поменять, чтобы в локали стало как в desired. Пустой список — уже так. */
+  function senderChangesNeeded(current = {}, desired = {}) {
+    const want = normaliseSenderPreset(desired);
+    const changes = [];
+    if (want.senderName && String(current.senderName || '').trim() !== want.senderName) changes.push('senderName');
+    if (Boolean(current.replySame) !== want.replySame) changes.push('replySame');
+    if (!want.replySame && want.replyTo && String(current.replyTo || '').trim() !== want.replyTo) changes.push('replyTo');
+    return changes;
+  }
+
+  function senderSummary(value = {}) {
+    const name = String(value.senderName || '').trim();
+    return name || '—';
+  }
+
+  async function waitForNativeField(key, timeoutMs = 1600) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const el = findNativeField(key);
+      if (el) return el;
+      await wait(80);
+    }
+    return null;
+  }
+
+  // Поля отправителя живут на под-вкладке «Sender Details». Если открыта
+  // «Attachments» или «Gmail annotation», их нет в DOM — откроем нужную.
+  async function ensureSenderDetailsVisible() {
+    if (findNativeField('senderName')) return true;
+    const tab = [...document.querySelectorAll('[role="tab"],button,div,span,a')]
+      .find((el) => !isRetKitElement(el) && textOf(el) === 'Sender Details' && isVisible(el));
+    tab?.click?.();
+    return Boolean(await waitForNativeField('senderName', 1500));
+  }
+
+  async function writeNativeSender(desired) {
+    const want = normaliseSenderPreset(desired);
+    if (!(await ensureSenderDetailsVisible())) return { ok: false, reason: 'Sender fields not found (open Email details → Sender Details)' };
+    const before = readNativeSender();
+    const changes = senderChangesNeeded(before, want);
+    if (!changes.length) return { ok: true, changed: false, before, after: before };
+    if (changes.includes('senderName')) {
+      const field = findNativeField('senderName');
+      setNativeValue(field, want.senderName);
+      try { field.dispatchEvent(new Event('blur', { bubbles: true })); } catch {}
+    }
+    if (changes.includes('replySame')) {
+      // Кликаем сам checkbox: клик по нарисованной галочке внутри <label>
+      // браузер передаёт ещё и в input — вышло бы два переключения.
+      const box = findNativeField('replySame');
+      box?.click?.();
+      await wait(120);
+      if (readNativeSender().replySame !== want.replySame) {
+        findNativeField('replySameControl')?.click?.();
+        await wait(120);
+      }
+    }
+    if (!want.replySame && want.replyTo) {
+      const reply = await waitForNativeField('replyTo', 800);
+      if (reply && readNativeValue(reply).trim() !== want.replyTo) {
+        setNativeValue(reply, want.replyTo);
+        try { reply.dispatchEvent(new Event('blur', { bubbles: true })); } catch {}
+      }
+    }
+    await wait(160);
+    const after = readNativeSender();
+    const left = senderChangesNeeded(after, want);
+    if (left.length) return { ok: false, reason: `MoEngage did not keep: ${left.join(', ')}`, before, after };
+    return { ok: true, changed: true, before, after };
+  }
+
+  async function applySenderToLocales(desired, locales, onProgress = () => {}) {
+    const core = root.__RetKitMoEngageCore;
+    const targets = sortLocalesForUi(locales || []);
+    const results = [];
+    if (!targets.length) return results;
+    const flush = await Promise.resolve(core?.flushBeforeLocaleSwitch?.() || { ok: true });
+    if (!flush?.ok) return [{ locale: '', ok: false, reason: flush?.reason || 'Current locale was not saved' }];
+    const origin = getNativeSelectedLocale() || getActiveLocale();
+    core?.setMultiLocaleBusy?.(true, `Sender 0/${targets.length}…`);
+    diagBreadcrumb('sender.apply.start', { locales: targets });
+    try {
+      for (let index = 0; index < targets.length; index += 1) {
+        const locale = targets[index];
+        onProgress(locale, `${index + 1}/${targets.length}`);
+        core?.setMultiLocaleBusy?.(true, `Sender ${index + 1}/${targets.length}…`);
+        const switched = await switchNativeLocale(locale, { rebind: false, preferNative: true, timeoutMs: 4000 });
+        if (!switched?.ok) { results.push({ locale, ok: false, reason: switched?.reason || 'could not open locale' }); continue; }
+        await wait(200);
+        let written;
+        try { written = await writeNativeSender(desired); } catch (error) { written = { ok: false, reason: error?.message || String(error) }; }
+        results.push({ locale, ...written });
+      }
+    } finally {
+      if (origin) { try { await switchNativeLocale(origin, { preferNative: true, rebind: true }); } catch {} }
+      core?.setMultiLocaleBusy?.(false);
+      syncSubjectFromMoEngage(true);
+    }
+    const failed = results.filter((r) => !r.ok);
+    diagBreadcrumb('sender.apply.done', { done: results.filter((r) => r.ok).length, failed: failed.length });
+    if (failed.length) diagIncident('sender_apply_partial', `Sender not applied in ${failed.length} locale(s)`, { failed: failed.map((f) => ({ locale: f.locale, reason: f.reason })) });
+    return results;
+  }
+
+  function paintSenderChip() {
+    const chip = document.getElementById(IDS.senderChip);
+    if (!chip) return;
+    const current = readNativeSender();
+    const presets = readSenderPresets();
+    const empty = current.found && !current.senderName;
+    chip.dataset.state = empty ? 'empty' : (current.found ? 'ok' : 'unknown');
+    const key = JSON.stringify([current.found, current.senderName, current.fromEmail, empty, presets.last]);
+    if (chip.dataset.key === key) return;
+    chip.dataset.key = key;
+    chip.replaceChildren();
+    const icon = document.createElement('span');
+    icon.textContent = empty ? '⚠' : '✉';
+    const name = document.createElement('span');
+    name.textContent = !current.found ? 'Sender' : (empty ? (presets.last ? `Sender empty · ${presets.last}?` : 'Sender empty') : current.senderName);
+    chip.append(icon, name);
+    if (current.found && !empty && current.fromEmail) {
+      const mail = document.createElement('span');
+      mail.className = 'rk-sender-mail';
+      mail.textContent = current.fromEmail;
+      chip.appendChild(mail);
+    }
+    chip.title = current.found
+      ? `Sender: ${current.senderName || '(empty)'}\nFrom: ${current.fromEmail || '—'}\nReply-to: ${current.replySame ? 'same as From' : (current.replyTo || '—')}\nClick: presets · apply to all locales`
+      : 'Sender fields are not visible in MoEngage (Email details → Sender Details)';
+  }
+
+  function syncPreheaderFromMoEngage(force = false) {
+    const target = document.getElementById(IDS.preheaderInput);
+    const native = findNativeField('preview');
+    if (!target) return false;
+    target.disabled = !native;
+    target.placeholder = native ? 'Preview text (preheader)' : 'Preview text — not found in MoEngage';
+    if (!native || (!force && document.activeElement === target)) return false;
+    const next = readNativeValue(native);
+    if (target.value === next) return false;
+    target.value = next;
+    return true;
+  }
+
+  function commitPreheaderToMoEngage(value) {
+    const native = findNativeField('preview');
+    if (!native) { workspaceStatus('MoEngage Preview Text field was not found', 'error'); return false; }
+    const next = String(value ?? '');
+    if (readNativeValue(native) === next) return true;
+    setNativeValue(native, next);
+    try { native.dispatchEvent(new Event('blur', { bubbles: true })); } catch {}
+    workspaceStatus('Preview text updated in MoEngage', 'ok');
+    return true;
+  }
+
+  function renderSenderPopover() {
+    const existing = document.getElementById(IDS.senderPopover);
+    if (existing) { existing.remove(); return; }
+    closeBridgePopovers(IDS.senderPopover);
+    const current = readNativeSender();
+    let store = readSenderPresets();
+    const lastPreset = store.presets.find((p) => p.name === store.last);
+    // Пустой отправитель — сразу предлагаем последний пресет.
+    const start = current.found && current.senderName ? current : (lastPreset || current);
+    const pop = document.createElement('div');
+    pop.id = IDS.senderPopover;
+    pop.className = 'rk-v050-popover';
+    pop.innerHTML = `
+      <div class="rk-v050-head"><strong>Sender</strong><button class="rk-v050-secondary" data-close>×</button></div>
+      <div class="rk-v050-grid">
+        <div class="rk-sender-presets" data-presets></div>
+        <label class="rk-sender-field"><span class="rk-v050-hint">Sender name</span><input class="rk-v050-input" data-sender-name autocomplete="off" spellcheck="false" placeholder="IQ Option"></label>
+        <div class="rk-sender-field"><span class="rk-v050-hint">From · chosen in MoEngage (Email Connector)</span><div class="rk-sender-static" data-from></div></div>
+        <div class="rk-sender-field">
+          <label class="rk-v050-row"><input type="checkbox" data-reply-same> <span>Reply-to same as From</span></label>
+          <input class="rk-v050-input" data-reply-to autocomplete="off" spellcheck="false" placeholder="reply@…">
+        </div>
+        <div class="rk-v050-grid">
+          <div class="rk-v050-row"><span class="rk-v050-hint" style="flex:1">Locales</span>
+            <button class="rk-v050-secondary" type="button" data-current>Current</button>
+            <button class="rk-v050-secondary" type="button" data-all>All</button></div>
+          <div class="rk-v054-test-locales" data-locales></div>
+        </div>
+        <div class="rk-sender-results" data-results hidden></div>
+        <div class="rk-sender-actions">
+          <button class="rk-v050-secondary" type="button" data-save-preset>Save as preset</button>
+          <button class="rk-v050-primary" type="button" data-apply>Apply</button>
+        </div>
+      </div>`;
+    const $ = (sel) => pop.querySelector(sel);
+    const nameInput = $('[data-sender-name]');
+    const sameBox = $('[data-reply-same]');
+    const replyInput = $('[data-reply-to]');
+    const applyBtn = $('[data-apply]');
+    const fill = (value) => {
+      nameInput.value = value.senderName || '';
+      sameBox.checked = value.replySame !== false;
+      replyInput.value = value.replySame !== false ? '' : (value.replyTo || '');
+      replyInput.hidden = sameBox.checked;
+    };
+    fill(start);
+    $('[data-from]').textContent = current.fromEmail || '—';
+    sameBox.addEventListener('change', () => { replyInput.hidden = sameBox.checked; });
+
+    const available = discoverNativeLocales();
+    const active = getActiveLocale();
+    if (active && !available.includes(active)) available.push(active);
+    const ordered = sortLocalesForUi(available);
+    const localeBox = $('[data-locales]');
+    const selected = () => [...pop.querySelectorAll('input[data-test-locale]:checked')].map((i) => i.dataset.testLocale);
+    const paintApply = () => {
+      const n = selected().length;
+      applyBtn.textContent = n > 1 ? `Apply to ${n} locales` : 'Apply';
+      applyBtn.disabled = !n;
+    };
+    const setLocales = (list) => { renderTestLocaleChoices(localeBox, ordered, list); paintApply(); };
+    // По умолчанию — все: ради этого окно и открывают.
+    setLocales(ordered);
+    localeBox.addEventListener('change', paintApply);
+    $('[data-current]').addEventListener('click', () => setLocales(active ? [active] : []));
+    $('[data-all]').addEventListener('click', () => setLocales(ordered));
+
+    const desired = () => normaliseSenderPreset({ senderName: nameInput.value, replySame: sameBox.checked, replyTo: replyInput.value });
+    const paintPresets = () => {
+      const box = $('[data-presets]');
+      box.replaceChildren();
+      if (!store.presets.length) {
+        const hint = document.createElement('span');
+        hint.className = 'rk-v050-hint';
+        hint.textContent = 'No presets yet — fill the fields and press “Save as preset”.';
+        box.appendChild(hint);
+        return;
+      }
+      const now = desired();
+      for (const preset of store.presets) {
+        const chip = document.createElement('span');
+        chip.className = 'rk-sender-preset';
+        chip.dataset.active = String(!senderChangesNeeded(now, preset).length && now.senderName === preset.senderName);
+        chip.title = `${preset.senderName} · reply-to ${preset.replySame ? 'same as From' : preset.replyTo}`;
+        const label = document.createElement('b');
+        label.textContent = preset.name;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = '×';
+        del.title = 'Delete preset';
+        del.addEventListener('click', (event) => {
+          event.stopPropagation();
+          store = writeSenderPresets({ presets: store.presets.filter((p) => p.name !== preset.name), last: store.last });
+          paintPresets();
+        });
+        chip.append(label, del);
+        chip.addEventListener('click', () => {
+          fill(preset);
+          store = writeSenderPresets({ ...store, last: preset.name });
+          paintPresets();
+        });
+        box.appendChild(chip);
+      }
+    };
+    paintPresets();
+    nameInput.addEventListener('input', paintPresets);
+
+    $('[data-save-preset]').addEventListener('click', () => {
+      const value = desired();
+      if (!value.senderName) { workspaceStatus('Sender name is empty — nothing to save', 'error'); return; }
+      const name = (prompt('Preset name', value.senderName) || '').trim();
+      if (!name) return;
+      store = writeSenderPresets({ presets: [{ ...value, name }, ...store.presets.filter((p) => p.name !== name)], last: name });
+      paintPresets();
+      workspaceStatus(`Preset “${name}” saved`, 'ok');
+    });
+    $('[data-close]').addEventListener('click', () => pop.remove());
+
+    applyBtn.addEventListener('click', async () => {
+      const value = desired();
+      const locales = selected();
+      if (!value.senderName) { workspaceStatus('Sender name is empty', 'error'); nameInput.focus(); return; }
+      if (!value.replySame && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.replyTo)) { workspaceStatus('Reply-to is not an email address', 'error'); replyInput.focus(); return; }
+      const matching = store.presets.find((p) => !senderChangesNeeded(value, p).length && p.senderName === value.senderName);
+      if (matching) store = writeSenderPresets({ ...store, last: matching.name });
+      const results = $('[data-results]');
+      results.hidden = false;
+      results.replaceChildren();
+      const row = (locale, text, cls) => {
+        let line = results.querySelector(`[data-locale="${locale}"]`);
+        if (!line) { line = document.createElement('div'); line.dataset.locale = locale; results.appendChild(line); }
+        line.replaceChildren();
+        const a = document.createElement('b'); a.textContent = localeUiLabel(locale) || 'current';
+        const b = document.createElement('span'); b.className = cls || ''; b.textContent = text;
+        line.append(a, b);
+      };
+      for (const control of pop.querySelectorAll('button,input')) control.disabled = true;
+      let list;
+      try {
+        if (locales.length === 1 && locales[0] === active) {
+          const one = await writeNativeSender(value);
+          list = [{ locale: active, ...one }];
+        } else {
+          list = await applySenderToLocales(value, locales, (locale, step) => row(locale, `writing ${step}…`));
+        }
+      } finally {
+        for (const control of pop.querySelectorAll('button,input')) control.disabled = false;
+        paintApply();
+      }
+      for (const r of list) {
+        if (!r.ok) row(r.locale, `✗ ${r.reason}`, 'err');
+        else if (!r.changed) row(r.locale, 'already set', 'same');
+        else row(r.locale, `✓ ${senderSummary(r.before)} → ${senderSummary(r.after)}`, 'ok');
+      }
+      const bad = list.filter((r) => !r.ok).length;
+      workspaceStatus(bad
+        ? `Sender: ${list.length - bad}/${list.length} locales done · see the list`
+        : `Sender set in ${list.length} locale(s) · press MoEngage “Done/Save” to keep it`, bad ? 'error' : 'ok');
+      paintSenderChip();
+    });
+
+    document.getElementById(IDS.workspace)?.appendChild(pop) || document.body.appendChild(pop);
+    nameInput.focus();
+  }
+
   function syncSubjectFromMoEngage(force = false) {
+    const changed = syncSubjectOnlyFromMoEngage(force);
+    if (!root.__RetKitMoEngageCore?.isMultiLocaleBusy?.()) {
+      try { syncPreheaderFromMoEngage(force); } catch {}
+      try { paintSenderChip(); } catch {}
+    }
+    return changed;
+  }
+
+  function syncSubjectOnlyFromMoEngage(force = false) {
     const multiLocaleBusy = Boolean(root.__RetKitMoEngageCore?.isMultiLocaleBusy?.());
     if (multiLocaleBusy) return false;
     const target = document.getElementById(IDS.subjectInput);
@@ -11356,7 +11904,25 @@ module.exports = { isRtlLocale, applyRtl };
         subjectTimer = setTimeout(() => commitSubjectToMoEngage(input.value), 260);
       });
       input.addEventListener('change', () => commitSubjectToMoEngage(input.value));
-      subjectRow.append(label, input);
+      const preLabel = document.createElement('span');
+      preLabel.className = 'rk-v053-locale-label';
+      preLabel.textContent = 'Preheader';
+      const pre = document.createElement('input');
+      pre.id = IDS.preheaderInput;
+      pre.type = 'text';
+      pre.autocomplete = 'off';
+      pre.spellcheck = false;
+      pre.placeholder = 'Preview text (preheader)';
+      pre.addEventListener('input', () => {
+        clearTimeout(preheaderTimer);
+        preheaderTimer = setTimeout(() => commitPreheaderToMoEngage(pre.value), 260);
+      });
+      pre.addEventListener('change', () => commitPreheaderToMoEngage(pre.value));
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.id = IDS.senderChip;
+      chip.addEventListener('click', renderSenderPopover);
+      subjectRow.append(label, input, preLabel, pre, chip);
       row.insertAdjacentElement('afterend', subjectRow);
       syncSubjectFromMoEngage(true);
     } else {
@@ -11443,6 +12009,10 @@ module.exports = { isRtlLocale, applyRtl };
 
   root.__RetKitMoEngageBridgeApi = {
     getActiveLocale,
+    readSender: () => readNativeSender(),
+    applySender: (value, locales) => applySenderToLocales(value, locales),
+    // Только вкладка MoEngage, без подсказок из текста редактора RetKit.
+    getNativeTabLocale: () => { try { return displayLocale(getNativeSelectedLocale() || ''); } catch { return ''; } },
     listLocales: async () => { await discoverNativeLocalesDeep(); return discoverNativeLocales(); },
     listAvailableLocales: () => listNativeAddableLocales(),
     addLocales: (locales) => addNativeLocales(locales),
@@ -11619,7 +12189,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.8.13' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.0' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -11645,7 +12215,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.8.13 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.0 loaded');
   }
 
   bootBridge();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.13
+// @version      0.9.0
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -615,6 +615,67 @@
     return !htmlBodyHasContent(local) && (htmlBodyHasContent(native) || htmlBodyHasContent(previewHtml));
   }
 
+  // Видимый текст письма — словами, без тегов и стилей.
+  function emailTextWords(html) {
+    const source = String(html ?? '');
+    const match = source.match(/<body\b[^>]*>([\s\S]*?)(?:<\/body>|$)/i);
+    const body = (match ? match[1] : source)
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<(?:script|style)\b[\s\S]*?<\/(?:script|style)>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&[a-z#0-9]+;/gi, ' ')
+      .toLowerCase();
+    return body.split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2);
+  }
+
+  // Доля общих слов (0…1). EN против AR — около 0, та же локаль после
+  // правки или переформатирования MoEngage — около 1.
+  function emailTextSimilarity(a, b) {
+    const left = emailTextWords(a);
+    const right = emailTextWords(b);
+    if (!left.length && !right.length) return 1;
+    if (!left.length || !right.length) return 0;
+    const counts = new Map();
+    for (const word of left) counts.set(word, (counts.get(word) || 0) + 1);
+    let common = 0;
+    for (const word of right) {
+      const n = counts.get(word) || 0;
+      if (n > 0) { common += 1; counts.set(word, n - 1); }
+    }
+    return common / Math.max(left.length, right.length);
+  }
+
+  /**
+   * Можно ли писать правку RetKit в редактор MoEngage прямо сейчас.
+   *
+   * RetKit держит текст той локали, к которой привязан (boundLocale). Если
+   * MoEngage за это время переключился на другую вкладку (клик по вкладке,
+   * поиск по локалям, перерисовка React), запись положила бы, например, EN в
+   * AR — ровно так арабская локаль оказалась английской. Пишем только поверх
+   * того, что видели в этой локали: редактор MoEngage не менялся, или менялся,
+   * но это всё ещё та же вкладка и тот же текст.
+   *
+   * @returns '' — писать можно; иначе причина отказа.
+   */
+  function nativeSwitchedUnderUs({ knownHtml = '', nativeHtml = '', sameAsKnown = false, boundLocale = '', tabLocale = '' } = {}) {
+    if (!knownHtml || sameAsKnown) return '';
+    const bound = String(boundLocale || '').toUpperCase();
+    const tab = String(tabLocale || '').toUpperCase();
+    const lang = (value) => (['DEFAULT'].includes(value) ? 'EN' : value.split('_')[0]);
+    const sameLocale = bound === tab
+      || (lang(bound) === lang(tab) && (!bound.includes('_') || !tab.includes('_')))
+      || (lang(bound) === 'EN' && lang(tab) === 'EN' && (bound === 'DEFAULT' || tab === 'DEFAULT'));
+    if (bound && tab && !sameLocale) {
+      return `MoEngage is on ${tab}, RetKit holds ${bound}`;
+    }
+    const similarity = emailTextSimilarity(knownHtml, nativeHtml);
+    if (similarity < 0.5) {
+      return `MoEngage now shows a different email (${Math.round(similarity * 100)}% same text) — another locale?`;
+    }
+    return '';
+  }
+
   function shouldSkipNativeCommit({ localHtml = '', nativeHtml = '' } = {}) {
     // Dirty only means the overlay changed since the last bookkeeping update.
     // Cmd/Ctrl+Z can restore the exact native content while dirty stays true.
@@ -905,6 +966,9 @@
     flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
+    // Мост ходит по локалям сам (отправитель на все локали) — на это время
+    // ядро не пишет и не подтягивает HTML, как при замене по локалям.
+    setMultiLocaleBusy: (value, message) => { try { setMultiLocaleBusy(value, message); } catch {} },
   };
 
   root.__RetKitMoEngageCore = core;
@@ -2449,7 +2513,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.8.13</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.0</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2474,7 +2538,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.8.13',
+        version: '0.9.0',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -2768,11 +2832,32 @@
     }
   }
 
+  // Код стёрли целиком — превью тоже пустое. Раньше справа оставалось старое
+  // письмо, пока не начнёшь печатать: казалось, что стирание не сработало.
+  // MoEngage при этом хранит прежнее письмо (пустое туда не пишется).
+  const EMPTY_PREVIEW_HTML = '<!doctype html><html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:14px/1.4 -apple-system,Segoe UI,sans-serif;color:#8a8f98;background:#fafafa;text-align:center">Editor is empty<br>MoEngage still keeps the saved email until you paste a new one</body></html>';
+
+  function showEmptyPreview() {
+    const frame = document.getElementById(IDS.previewFrame);
+    if (!frame || STATE.previewHtml === EMPTY_PREVIEW_HTML) return;
+    clearTimeout(STATE.previewTimer);
+    STATE.previewTimer = null;
+    STATE.previewPendingHtml = '';
+    STATE.previewHtml = EMPTY_PREVIEW_HTML;
+    frame.onload = () => schedulePreviewResize(frame);
+    frame.srcdoc = EMPTY_PREVIEW_HTML;
+  }
+
+  function overlayIsEmpty() {
+    return !String(STATE.overlayEditor?.getValue?.() ?? 'x').trim();
+  }
+
   function scheduleLocalPreview(html, delay = 140) {
     STATE.previewPendingHtml = String(html || '');
     clearTimeout(STATE.previewTimer);
     STATE.previewTimer = null;
-    if (!STATE.previewPendingHtml || hasBlockingPreviewSyntaxIssue(STATE.previewPendingHtml)) return;
+    if (!STATE.previewPendingHtml.trim()) { showEmptyPreview(); return; }
+    if (hasBlockingPreviewSyntaxIssue(STATE.previewPendingHtml)) return;
     STATE.previewTimer = setTimeout(() => {
       STATE.previewTimer = null;
       const next = STATE.previewPendingHtml;
@@ -2803,6 +2888,8 @@
 
   function refreshPreviewFromMoEngage(force = false) {
     if (!force && STATE.multiLocaleBusy) return;
+    // Пустой редактор — не подменяем пустое превью письмом из MoEngage.
+    if (!force && overlayIsEmpty()) { showEmptyPreview(); return; }
     const html = getRenderedPreviewHtml();
     if (!html) return;
     // While there is unsaved local work, the local iframe is authoritative.
@@ -2882,7 +2969,29 @@
       status('Already in sync', 'ok');
       return true;
     }
-    diagBreadcrumb('sync.start', { revision: startedRevision, length: next.length, force: Boolean(force) });
+    const tabLocale = nativeTabLocale();
+    const switchedReason = nativeSwitchedUnderUs({
+      knownHtml: STATE.knownNativeHtml || '',
+      nativeHtml: nativeHtmlBefore,
+      sameAsKnown: Boolean(STATE.knownNativeHtml) && htmlEquivalentForSync(STATE.knownNativeHtml, nativeHtmlBefore),
+      boundLocale: STATE.boundLocale,
+      tabLocale,
+    });
+    if (switchedReason) {
+      // Правку не теряем: она в инциденте (с HTML) и в буфере обмена. Но в
+      // чужую локаль не пишем ни при каком раскладе.
+      diagIncident('write_blocked_other_locale', `Not written: ${switchedReason}`, {
+        boundLocale: STATE.boundLocale || '', tabLocale, revision: startedRevision, html: next, nativeHtml: nativeHtmlBefore,
+      });
+      try { root.navigator?.clipboard?.writeText?.(next)?.catch?.(() => {}); } catch {}
+      STATE.dirty = false;
+      STATE.pendingApply = false;
+      const lost = STATE.boundLocale || 'previous locale';
+      rebindNativeEditorFromMoEngage({ preserveCursor: false });
+      status(`⚠ Not saved: ${switchedReason}. Your ${lost} edit was NOT written here — it is in the clipboard and in RetKit logs.`, 'error');
+      return false;
+    }
+    diagBreadcrumb('sync.start', { revision: startedRevision, length: next.length, force: Boolean(force), locale: STATE.boundLocale || '', tab: tabLocale });
 
     STATE.applying = true;
     STATE.syncingToNative = true;
@@ -2940,6 +3049,7 @@
       STATE.dirty = false;
       STATE.lastAppliedRevision = startedRevision;
       STATE.lastAppliedAt = Date.now();
+      rememberNativeHtml((getNativeEditor() || native)?.getValue?.() || next);
       const durationMs = STATE.lastAppliedAt - startedAt;
       lastNativeSyncMs = durationMs;
       diagBreadcrumb('sync.done', { revision: startedRevision, durationMs });
@@ -3009,6 +3119,7 @@
     }
     STATE.syncingFromNative = true;
     const cursor = overlay.getCursor();
+    rememberNativeHtml(native.getValue());
     try {
       overlay.setValue(next);
       overlay.setCursor(cursor);
@@ -3067,6 +3178,7 @@
 
     STATE.nativeEditor = nextNative;
     STATE.syncingFromNative = true;
+    rememberNativeHtml(nextNative.getValue());
     try {
       const next = beautifyEmailHtml(nextNative.getValue());
       if (overlay.getValue() !== next) {
@@ -3121,6 +3233,16 @@
     diagIncident('native_empty_body', `MoEngage code view shows an empty <body> for ${locale}; preview still has the email`, { locale, nativeHtml: native, previewLength: preview.length });
     status(`⚠ ${locale}: MoEngage code view came up EMPTY (preview still has the email). Nothing is saved from here — reload the page and reopen ${locale}.`, 'error');
     return true;
+  }
+
+  // Вкладка MoEngage как есть. getActiveLocale смотрит и в текст редактора
+  // RetKit — для проверки «куда пишем» это порочный круг.
+  function nativeTabLocale() {
+    try { return String(root.__RetKitMoEngageBridgeApi?.getNativeTabLocale?.() || '').toUpperCase(); } catch { return ''; }
+  }
+
+  function rememberNativeHtml(html) {
+    STATE.knownNativeHtml = String(html ?? '');
   }
 
   function currentBridgeLocale() {
@@ -3399,6 +3521,7 @@
 
     STATE.nativeEditor = native;
     STATE.boundLocale = currentBridgeLocale();
+    rememberNativeHtml(native.getValue?.() || '');
     setTimeout(() => warnIfNativeBodyEmpty(), 600);
     STATE.previewHtml = '';
     STATE.previewPendingHtml = '';
@@ -3636,7 +3759,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.8.13 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.0 loaded');
   }
 
   boot();
