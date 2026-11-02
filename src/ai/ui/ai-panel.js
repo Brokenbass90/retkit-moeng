@@ -75,7 +75,40 @@
     return shown == null ? '' : `Usage ${shown} tokens`;
   }
 
-  root.__RetKitAiUiCore = { clampAiHeight, nextAiPanelState, providerStatusView, providerButtonView, normalizeAiMode, usageStatusText };
+  function agoText(at, now = Date.now()) {
+    const s = Math.max(0, Math.round((now - Number(at || 0)) / 1000));
+    if (s < 60) return 'только что';
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} мин назад`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} ч назад`;
+    return `${Math.round(h / 24)} дн назад`;
+  }
+
+  /**
+   * Что показать про AI. Источник один — состояние связи с агентом.
+   * tone: idle (серый) · wait (жёлтый) · ok (зелёный) · busy (синий).
+   */
+  function agentView(state = {}, now = Date.now()) {
+    const client = String(state.client || '').trim() || 'Агент';
+    const recent = Number(state.agentSeenAt || 0) && now - Number(state.agentSeenAt) < 24 * 60 * 60 * 1000;
+    if (state.busy || (state.relay === 'on' && now - Number(state.lastActivityAt || 0) < 4000 && state.lastActivityAt)) {
+      return { tone: 'busy', title: `${client} работает…`, short: `${client} работает…`, action: 'none' };
+    }
+    if (state.relay === 'opening') return { tone: 'wait', title: 'Открываю окно связи…', short: 'Подключаю…', action: 'none' };
+    if (state.relay !== 'on') {
+      return { tone: 'idle', title: 'AI не подключён', short: 'AI не подключён', action: 'connect',
+        hint: 'Нажмите «Подключить AI» — откроется маленькое окно связи. Оно даст текст для вашего Claude или Codex.' };
+    }
+    if (!recent) {
+      return { tone: 'wait', title: 'Окно связи открыто · агент ещё не заходил', short: 'Ждём агента', action: 'copy',
+        hint: 'Скопируйте текст и вставьте его в чат своему Claude или Codex. Он подключится сам или скажет, куда нажать.' };
+    }
+    return { tone: 'ok', title: `${client} подключён · был ${agoText(state.agentSeenAt, now)}`, short: `${client} · ${agoText(state.agentSeenAt, now)}`, action: 'copy',
+      hint: 'Пишите агенту в Claude или Codex: «открой моё письмо в MoEngage». Здесь видно, что он делает. Сохраняете кампанию вы.' };
+  }
+
+  root.__RetKitAiUiCore = { clampAiHeight, nextAiPanelState, providerStatusView, providerButtonView, normalizeAiMode, usageStatusText, agentView, agoText };
 
   if (typeof document === 'undefined') return;
 
@@ -93,6 +126,14 @@
   const providerRuntime = { codex: { state: '' }, claude: { state: '' } };
   const providerUsage = { codex: null, claude: null };
   let activeProvider = root.localStorage?.getItem('retkit-ai-provider') === 'claude' ? 'claude' : 'codex';
+  // Встроенный чат через локальный мост — только для тех, кто его включил.
+  // По умолчанию AI живёт в Claude/Codex, а здесь — статус и лента действий.
+  const localMode = () => { try { return root.localStorage?.getItem('retkit-ai-local-mode') === '1'; } catch { return false; } };
+  let agentUnsub = null;
+  let agentTick = null;
+  // Панель монтируется, пока окно RetKit ещё не вставлено в страницу, —
+  // поэтому ищем элементы в самой панели, а не через document.getElementById.
+  let agentPanelEl = null;
   const activeMode = 'agent';
   let chat = null;
 
@@ -138,6 +179,27 @@
       #${IDS.grip}[aria-hidden="true"] { visibility:hidden; pointer-events:none; }
       #${IDS.toggle} { width:28px; height:26px; border:0; border-radius:7px; background:transparent; color:#8fa2b8; font:700 15px/1 inherit; cursor:pointer; margin-left:2px; }
       #${IDS.toggle}:hover { background:#1e2b3d; color:#fff; }
+      .rk-agent-dot { width:8px; height:8px; border-radius:50%; background:#5b6b80; flex:0 0 8px; }
+      [data-tone="wait"] > .rk-agent-dot, .rk-agent-dot[data-tone="wait"] { background:#e5b858; }
+      [data-tone="ok"] > .rk-agent-dot, .rk-agent-dot[data-tone="ok"] { background:#55cf91; }
+      [data-tone="busy"] > .rk-agent-dot, .rk-agent-dot[data-tone="busy"] { background:#5b8cff; animation:rk-agent-pulse 1s ease-in-out infinite; }
+      @keyframes rk-agent-pulse { 50% { opacity:.35; } }
+      #retkit-agent-status { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#9fb0c4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+      .rk-agent { flex:1; min-height:0; display:flex; flex-direction:column; gap:10px; padding:12px 14px; overflow:auto; font:12.5px/1.45 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .rk-agent-state { display:flex; align-items:center; gap:9px; color:#e8eef8; font-weight:650; font-size:13px; }
+      .rk-agent-hint { color:#8fa2b8; margin:0; }
+      .rk-agent-actions { display:flex; gap:8px; flex-wrap:wrap; }
+      .rk-agent-actions button { border-radius:8px; padding:7px 12px; cursor:pointer; font:600 12px inherit; }
+      .rk-agent-primary { border:1px solid #4c75e7; background:#315be9; color:#fff; }
+      .rk-agent-secondary { border:1px solid #334155; background:#172130; color:#dce6f4; }
+      .rk-agent-feed { display:grid; gap:3px; }
+      .rk-agent-feed-title { color:#71839a; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
+      .rk-agent-feed-row { display:grid; grid-template-columns:44px 1fr; gap:8px; color:#c9d4e3; }
+      .rk-agent-feed-row time { color:#6d7f96; font-variant-numeric:tabular-nums; }
+      .rk-agent-feed-row[data-ok="0"] span { color:#ff8b8b; }
+      .rk-agent-empty { color:#6d7f96; }
+      .rk-agent-input { margin-top:auto; border:1px dashed #334155; border-radius:8px; padding:8px 10px; color:#6d7f96; cursor:not-allowed; user-select:none; }
+      .rk-agent-local { align-self:flex-start; background:none; border:0; padding:0; color:#5d6f86; font-size:11px; cursor:pointer; text-decoration:underline dotted; }
     `;
     document.head.appendChild(style);
   }
@@ -167,7 +229,7 @@
     if (panel) panel.dataset.open = state.open ? '1' : '0';
     grip?.setAttribute('aria-hidden', state.open ? 'false' : 'true');
     const title = document.getElementById('retkit-ai-title');
-    if (title) title.textContent = state.open ? 'RetKit AI' : '✦ Ask AI…';
+    if (title) title.textContent = localMode() ? (state.open ? 'RetKit AI' : '✦ Ask AI…') : 'AI';
     if (toggle) {
       toggle.dataset.open = state.open ? '1' : '0';
       toggle.textContent = state.open ? '⌄' : '⌃';
@@ -180,7 +242,7 @@
   function toggleAiPanel(force) {
     state = nextAiPanelState(state, typeof force === 'boolean' ? { type: force ? 'open' : 'close' } : { type: 'toggle' });
     renderState();
-    if (state.open) ensureBridgeConnection();
+    if (state.open && localMode()) ensureBridgeConnection();
     return getAiPanelState();
   }
 
@@ -303,6 +365,8 @@
       return true;
     }
 
+    if (!localMode()) return mountAgentPanel(editorPane, sourceHost);
+
     const stack = document.createElement('div');
     stack.id = IDS.stack;
     const panel = document.createElement('section');
@@ -354,6 +418,109 @@
     renderState();
     if (state.open) ensureBridgeConnection();
     renderProviders();
+    return true;
+  }
+
+  function renderAgent(agentState) {
+    const relay = root.__RetKitAgentRelay;
+    const view = agentView(agentState || relay?.getState?.() || {});
+    const scope = agentPanelEl || document;
+    const status = scope.querySelector('#retkit-agent-status');
+    if (status) {
+      status.dataset.tone = view.tone;
+      status.replaceChildren(Object.assign(document.createElement('span'), { className: 'rk-agent-dot' }), document.createTextNode(view.short));
+      status.title = view.title;
+    }
+    const box = scope.querySelector('#retkit-agent-box');
+    if (!box) return;
+    const stateEl = box.querySelector('[data-state]');
+    stateEl.dataset.tone = view.tone;
+    stateEl.replaceChildren(Object.assign(document.createElement('span'), { className: 'rk-agent-dot' }), document.createTextNode(view.title));
+    box.querySelector('[data-hint]').textContent = view.hint || '';
+    const actions = box.querySelector('[data-actions]');
+    const key = `${view.action}|${Boolean(agentState?.prompt)}`;
+    if (actions.dataset.key !== key) {
+      actions.dataset.key = key;
+      actions.replaceChildren();
+      const add = (label, cls, fn) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = cls; b.textContent = label;
+        b.addEventListener('click', () => fn(b));
+        actions.appendChild(b);
+      };
+      const copy = async (b) => {
+        const ok = await relay?.copyPrompt?.();
+        b.textContent = ok ? '✓ Скопировано — вставьте агенту' : 'Не скопировалось — нажмите в окне связи';
+        setTimeout(() => { b.textContent = 'Скопировать для агента'; }, 2200);
+      };
+      if (view.action === 'connect') add('Подключить AI', 'rk-agent-primary', () => relay?.connect?.());
+      if (view.action === 'copy' && agentState?.prompt) add('Скопировать для агента', view.tone === 'ok' ? 'rk-agent-secondary' : 'rk-agent-primary', copy);
+      if (view.action !== 'connect') add('Окно связи', 'rk-agent-secondary', () => relay?.connect?.());
+    }
+    const feed = box.querySelector('[data-feed]');
+    const items = agentState?.feed || [];
+    feed.replaceChildren();
+    if (!items.length) {
+      feed.appendChild(Object.assign(document.createElement('div'), { className: 'rk-agent-empty', textContent: 'Агент пока ничего не делал в этой вкладке.' }));
+    } else {
+      for (const item of items.slice(0, 20)) {
+        const row = document.createElement('div');
+        row.className = 'rk-agent-feed-row';
+        row.dataset.ok = item.ok ? '1' : '0';
+        const t = document.createElement('time');
+        t.textContent = new Date(item.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const s = document.createElement('span');
+        s.textContent = item.ok ? item.text : `${item.text} — ${item.error}`;
+        row.append(t, s);
+        feed.appendChild(row);
+      }
+    }
+  }
+
+  function mountAgentPanel(editorPane, sourceHost) {
+    const stack = document.createElement('div');
+    stack.id = IDS.stack;
+    const panel = document.createElement('section');
+    panel.id = IDS.panel;
+    panel.innerHTML = `<div id="${IDS.header}"><strong id="retkit-ai-title">AI</strong><span id="retkit-agent-status"></span><span style="margin-left:auto"></span><button type="button" id="${IDS.toggle}" title="Open or collapse AI">⌄</button></div>
+      <div id="${IDS.body}"><div class="rk-agent" id="retkit-agent-box">
+        <div class="rk-agent-state" data-state></div>
+        <p class="rk-agent-hint" data-hint></p>
+        <div class="rk-agent-actions" data-actions></div>
+        <div class="rk-agent-feed-title">Что делал агент</div>
+        <div class="rk-agent-feed" data-feed></div>
+        <div class="rk-agent-input" title="Чат с агентом — в приложении Claude или Codex">Писать агенту — в Claude или Codex, не здесь</div>
+        <button type="button" class="rk-agent-local" data-local>Локальный режим (чат через мост на этом компьютере)</button>
+      </div></div>`;
+    agentPanelEl = panel;
+    const grip = document.createElement('div');
+    grip.id = IDS.grip;
+    sourceHost.parentElement?.insertBefore(stack, sourceHost);
+    stack.append(sourceHost, grip, panel);
+    panel.querySelector(`#${IDS.toggle}`)?.addEventListener('click', (event) => { event.stopPropagation(); toggleAiPanel(); });
+    panel.querySelector(`#${IDS.header}`)?.addEventListener('dblclick', () => toggleAiPanel());
+    panel.querySelector('[data-local]')?.addEventListener('click', () => {
+      if (!root.confirm?.('Включить встроенный чат через локальный мост? Нужны установленные Claude Code/Codex и запущенный мост. Вернуть: тот же пункт.')) return;
+      try { root.localStorage?.setItem('retkit-ai-local-mode', '1'); } catch {}
+      root.alert?.('Закройте и снова откройте RetKit.');
+    });
+    let dragging = false;
+    grip.addEventListener('pointerdown', (event) => { if (!state.open) return; dragging = true; grip.setPointerCapture?.(event.pointerId); event.preventDefault?.(); });
+    grip.addEventListener('pointermove', (event) => { if (!dragging) return; const rect = stack.getBoundingClientRect(); setAiPanelHeight(rect.bottom - event.clientY); });
+    const stop = () => { if (!dragging) return; dragging = false; refreshLayout(); };
+    grip.addEventListener('pointerup', stop);
+    grip.addEventListener('pointercancel', stop);
+
+    try { agentUnsub?.(); } catch {}
+    agentUnsub = root.__RetKitAgentRelay?.subscribe?.(renderAgent) || null;
+    clearInterval(agentTick);
+    // «был N мин назад» и «работает…» стареют сами — перерисовка раз в 15 с.
+    agentTick = setInterval(() => {
+      if (!agentPanelEl?.isConnected && !document.getElementById('retkit-agent-box')) { clearInterval(agentTick); return; }
+      renderAgent(root.__RetKitAgentRelay?.getState?.());
+    }, 15000);
+    renderState();
+    renderAgent(root.__RetKitAgentRelay?.getState?.());
     return true;
   }
 

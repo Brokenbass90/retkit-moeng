@@ -124,15 +124,70 @@
   let relayOrigin = '';
   let acked = false;
   let heartbeat = null;
-  let button = null;
 
+  // Одно состояние «AI» на всё расширение. Панель внизу только рисует его,
+  // поэтому после закрытия/открытия RetKit индикатор тот же, что и был.
+  const agentState = {
+    relay: 'off',          // off | opening | on
+    agentSeenAt: 0,        // когда агент последний раз заходил по личной ссылке (из студии)
+    client: '',            // Claude / Codex — как он представился
+    prompt: '',            // текст «для агента»: ссылка + что делать
+    busy: false,
+    lastActivityAt: 0,
+    feed: [],              // что агент делал в этой вкладке
+  };
+  const listeners = new Set();
+  function emitState() {
+    for (const fn of listeners) { try { fn(getState()); } catch {} }
+  }
+  function getState() {
+    return { ...agentState, feed: agentState.feed.slice() };
+  }
+  function subscribe(fn) {
+    listeners.add(fn);
+    try { fn(getState()); } catch {}
+    return () => listeners.delete(fn);
+  }
   function setButton(state) {
-    if (!button) return;
-    button.textContent = state === 'on' ? '🤖 Агент ✓' : '🤖 Агент';
-    button.classList.toggle('rk-active', state === 'on');
-    button.title = state === 'on'
-      ? 'Ваш агент на связи через окно студии. Нажмите, чтобы показать это окно.'
-      : 'Подключить своего Claude или Codex к этому письму';
+    const next = state === 'on' ? 'on' : 'off';
+    if (agentState.relay === next) return;
+    agentState.relay = next;
+    emitState();
+  }
+
+  const TOOL_WORDS = {
+    status: 'проверил, что открыто',
+    read_email: 'прочитал письмо',
+    write_email: 'записал правку',
+    switch_locale: 'переключил локаль',
+    find_across_locales: 'искал по локалям',
+    validator: 'проверил ошибки HTML',
+  };
+  function feedText(tool, args, reply) {
+    const locale = normLocale(reply?.result?.locale || args?.locale || '');
+    if (tool === 'find_across_locales' && args?.replacement !== undefined) return 'подготовил замену по локалям — подтверждаете вы';
+    const base = TOOL_WORDS[tool] || tool;
+    return locale && tool !== 'status' ? `${base} · ${locale}` : base;
+  }
+  function pushFeed(entry) {
+    agentState.feed.unshift({ at: Date.now(), ...entry });
+    agentState.feed.length = Math.min(agentState.feed.length, 40);
+  }
+
+  async function copyPrompt() {
+    const text = agentState.prompt;
+    if (!text) return false;
+    try { await root.navigator.clipboard.writeText(text); return true; } catch {}
+    try {
+      const area = root.document.createElement('textarea');
+      area.value = text;
+      area.style.cssText = 'position:fixed;opacity:0';
+      root.document.body.appendChild(area);
+      area.select();
+      const ok = root.document.execCommand('copy');
+      area.remove();
+      return ok;
+    } catch { return false; }
   }
 
   function post(message) {
@@ -154,6 +209,7 @@
     relayWindow = root.open(url, WINDOW_NAME, 'popup,width=440,height=420');
     if (!relayWindow) { root.alert?.('Браузер заблокировал окно связи — разрешите всплывающие окна для MoEngage.'); return; }
     acked = false;
+    if (agentState.relay !== 'on') { agentState.relay = 'opening'; emitState(); }
     post({ type: 'hello' });
     clearInterval(heartbeat);
     heartbeat = setInterval(sendStatus, 4000);
@@ -166,28 +222,40 @@
     if (!msg || msg.source !== 'retkit-relay') return;
     if (event.source && event.source !== relayWindow) relayWindow = event.source;
     if (msg.type === 'hello-ack') { acked = true; setButton('on'); return; }
+    if (msg.type === 'link') {
+      // Окно студии знает личную ссылку и когда агент по ней заходил.
+      agentState.prompt = String(msg.prompt || '');
+      agentState.agentSeenAt = Number(msg.lastSeenAt || 0) || agentState.agentSeenAt;
+      agentState.client = String(msg.lastClient || agentState.client || '');
+      if (!acked) { acked = true; agentState.relay = 'on'; }
+      emitState();
+      return;
+    }
     if (msg.type !== 'command') return;
+    const tool = String(msg.tool || '');
+    agentState.busy = true;
+    agentState.lastActivityAt = Date.now();
+    agentState.agentSeenAt = Date.now();
+    emitState();
     let reply;
     try {
-      reply = { ok: true, result: await run(String(msg.tool || ''), msg.args || {}) };
+      reply = { ok: true, result: await run(tool, msg.args || {}) };
     } catch (error) {
       reply = { ok: false, error: String(error?.message || error) };
     }
+    agentState.busy = false;
+    agentState.lastActivityAt = Date.now();
+    if (tool !== 'status') pushFeed({ tool, ok: reply.ok, text: feedText(tool, msg.args || {}, reply), error: reply.ok ? '' : reply.error });
+    emitState();
     post({ type: 'result', id: msg.id, ...reply });
   });
 
-  function ensureUi(workspace) {
-    const bar = workspace?.querySelector?.('.rk-topbar');
-    if (!bar || root.document.getElementById('retkit-agent-button')) return;
-    button = root.document.createElement('button');
-    button.id = 'retkit-agent-button';
-    button.className = 'rk-btn';
-    button.type = 'button';
-    button.addEventListener('click', connect);
-    setButton(relayWindow && !relayWindow.closed && acked ? 'on' : 'off');
-    const anchor = root.document.getElementById('retkit-diagnostics-button') || bar.querySelector('.rk-spacer');
-    bar.insertBefore(button, anchor || null);
+  // Кнопки «Агент» в верхней панели больше нет: подключение и статус — в
+  // панели AI внизу (одно место, один индикатор).
+  function ensureUi() {
+    root.document?.getElementById('retkit-agent-button')?.remove();
+    if (relayWindow && relayWindow.closed && agentState.relay !== 'off') setButton('off');
   }
 
-  root.__RetKitAgentRelay = { ensureUi, run, stableHash, bodyHasContent, studioUrl };
+  root.__RetKitAgentRelay = { ensureUi, run, stableHash, bodyHasContent, studioUrl, connect, copyPrompt, getState, subscribe, feedText };
 })(typeof window !== 'undefined' ? window : globalThis);

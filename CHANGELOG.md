@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+
+- AI panel no longer has a chat box. You talk to Claude or Codex in their own app; RetKit shows one status (not connected / waiting for the agent / Claude connected · seen N min ago / working…), a “Copy for the agent” button (link + what to do) and a feed of what the agent did in this tab. The status no longer changes when the panel is collapsed and reopened.
+- The “🤖 Агент” toolbar button is gone — connecting lives in the AI panel.
+- The old built-in chat via the local bridge is still there as “Локальный режим”.
+
 ## 0.9.4
 
 - Doctor sits as one group with Logs (“● Doctor | Logs”), not as a separate toolbar button.

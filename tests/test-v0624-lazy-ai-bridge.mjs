@@ -26,7 +26,7 @@ assert.match(connect, /client\.connect\(\)/, 'explicit AI use should still start
 assert.match(connect, /connected.*connecting|connecting.*connected/s, 'do not reconnect while already connected/connecting');
 
 const toggle = functionBody('toggleAiPanel');
-assert.match(toggle, /if \(state\.open\) ensureBridgeConnection\(\)/, 'opening the AI drawer should connect lazily');
+assert.match(toggle, /if \(state\.open && localMode\(\)\) ensureBridgeConnection\(\)/, 'opening the AI drawer connects the local bridge only in local mode');
 
 const provider = functionBody('selectAndConnectProvider');
 assert.match(provider, /ensureBridgeConnection\(\)/, 'provider click should connect the bridge on demand');
