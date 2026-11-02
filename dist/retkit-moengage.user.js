@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.3
+// @version      0.9.4
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3300,7 +3300,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.3</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.4</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3325,7 +3325,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.3',
+        version: '0.9.4',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4546,7 +4546,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.3 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.4 loaded');
   }
 
   boot();
@@ -6323,7 +6323,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.3',
+          clientVersion: '0.9.4',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8801,7 +8801,10 @@ module.exports = { isRtlLocale, applyRtl };
       #${IDS.senderChip}[data-state="empty"] { border-color:#b7791f; color:#f6c76b; background:#2a2112; }
       .rk-sender-field { display:grid; gap:4px; min-width:0; }
       .rk-sender-two { display:grid; grid-template-columns:1fr 1.4fr; gap:8px; }
-      #${IDS.doctorButton} { display:inline-flex; align-items:center; gap:6px; }
+      #${IDS.doctorButton} { display:inline-flex; align-items:center; justify-content:center; gap:5px; padding-left:9px; padding-right:9px; }
+      #${IDS.doctorButton}.rk-doc-joined { border-top-right-radius:0; border-bottom-right-radius:0; margin-right:0; }
+      #${IDS.doctorButton}.rk-doc-joined + #retkit-diagnostics-button { border-top-left-radius:0; border-bottom-left-radius:0; border-left-color:transparent; margin-left:-1px; }
+      #${IDS.doctorButton} .rk-doc-label { font-size:11px; letter-spacing:.02em; }
       #${IDS.doctorButton} .rk-doc-dot { width:8px; height:8px; border-radius:50%; background:#5b6b80; }
       #${IDS.doctorButton}[data-state="pass"] .rk-doc-dot { background:#55cf91; }
       #${IDS.doctorButton}[data-state="unknown"] .rk-doc-dot { background:#e5b858; }
@@ -8926,7 +8929,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.3');
+    setTextContentIfChanged(version, 'v0.9.4');
     return true;
   }
 
@@ -11233,10 +11236,29 @@ module.exports = { isRtlLocale, applyRtl };
     };
     pop.querySelector('[data-close]').addEventListener('click', () => pop.remove());
     pop.querySelector('[data-run]').addEventListener('click', paint);
-    pop.querySelector('[data-copy]').addEventListener('click', async () => {
+    pop.querySelector('[data-copy]').addEventListener('click', async (event) => {
+      const copyBtn = event.currentTarget;
       const text = doctorReportText(last || runDoctor());
-      try { await navigator.clipboard.writeText(text); workspaceStatus('Отчёт Doctor в буфере обмена', 'ok'); }
-      catch { workspaceStatus('Не удалось скопировать отчёт', 'error'); }
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch {
+        // Запасной путь, если буфер обмена не разрешён странице.
+        try {
+          const area = document.createElement('textarea');
+          area.value = text; area.style.cssText = 'position:fixed;opacity:0';
+          pop.appendChild(area); area.select(); ok = document.execCommand('copy'); area.remove();
+        } catch {}
+      }
+      if (!ok) {
+        copyBtn.textContent = 'Не скопировалось';
+        workspaceStatus('Не удалось скопировать отчёт Doctor', 'error');
+        return;
+      }
+      copyBtn.textContent = '✓ Скопировано';
+      copyBtn.classList.add('rk-v050-primary');
+      copyBtn.classList.remove('rk-v050-secondary');
+      for (const b2 of pop.querySelectorAll('button')) b2.disabled = true;
+      workspaceStatus('Отчёт Doctor в буфере обмена — вставьте его в чат', 'ok');
+      setTimeout(() => pop.remove(), 900);
     });
     document.getElementById(IDS.workspace)?.appendChild(pop) || document.body.appendChild(pop);
     paint();
@@ -12225,14 +12247,24 @@ module.exports = { isRtlLocale, applyRtl };
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
     }
     if (!document.getElementById(IDS.doctorButton)) {
-      const button = makeToolbarButton(IDS.doctorButton, 'Doctor', renderDoctorPopover, 'Проверка всех мест MoEngage, с которыми работает RetKit');
+      const button = makeToolbarButton(IDS.doctorButton, '', renderDoctorPopover, 'Doctor — проверка всех мест MoEngage, с которыми работает RetKit');
       const dot = document.createElement('span');
       dot.className = 'rk-doc-dot';
-      button.prepend(dot);
+      const label = document.createElement('span');
+      label.className = 'rk-doc-label';
+      label.textContent = 'Doctor';
+      button.replaceChildren(dot, label);
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
       // Тихая проверка после открытия: точка сразу показывает, всё ли на месте.
       scheduleSilentDoctor(2500);
     }
+
+    const doctorBtn = document.getElementById(IDS.doctorButton);
+    const logsBtn = document.getElementById('retkit-diagnostics-button');
+    if (doctorBtn && logsBtn && logsBtn.parentElement === bar && doctorBtn.nextElementSibling !== logsBtn) {
+      bar.insertBefore(doctorBtn, logsBtn);
+    }
+    doctorBtn?.classList.toggle('rk-doc-joined', Boolean(logsBtn && doctorBtn.nextElementSibling === logsBtn));
 
     let row = document.getElementById(IDS.localeRow);
     if (!row) {
@@ -12587,7 +12619,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.3' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.4' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12613,7 +12645,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.3 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.4 loaded');
   }
 
   bootBridge();

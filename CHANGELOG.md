@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.4
+
+- Doctor sits as one group with Logs (“● Doctor | Logs”), not as a separate toolbar button.
+- “Copy report” shows “✓ Скопировано” and closes the window.
+
 ## 0.9.3
 
 - Doctor: one button checks every MoEngage spot RetKit relies on (code editor, Code View, locale tabs, Subject, Preheader, Sender, Connector, From, Reply-to, Test Campaign, sync state, storage) and says PASS / FAIL / UNKNOWN with what to do. Read-only. A silent run after opening colours the dot on the button; “Copy report” for bug reports.

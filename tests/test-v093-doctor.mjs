@@ -36,4 +36,7 @@ for (const id of ["'editor'", "'codeview'", "'body'", "'preview'", "'locales'", 
 }
 assert.match(core, /doctorProbe: \(\) =>/, 'core exposes a read-only probe');
 assert.match(bridge, /scheduleSilentDoctor\(2500\)/, 'silent run after the workspace opens paints the dot');
+// v0.9.4: копирование — отметка «Скопировано» и закрытие; кнопка рядом с Logs.
+assert.match(bridge, /'✓ Скопировано'[\s\S]{0,400}setTimeout\(\(\) => pop\.remove\(\), 900\)/, 'copy confirms and closes');
+assert.match(bridge, /bar\.insertBefore\(doctorBtn, logsBtn\)/, 'Doctor sits right before Logs');
 console.log('✓ v0.9.3: Doctor');
