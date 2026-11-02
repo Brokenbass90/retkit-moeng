@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.9
+
+- Email weight next to “HTML”: ⚖ size in KB, green / yellow from 90 KB / red from 102 KB (Gmail clips the email), warning when a <style> is over 16 KB (Gmail drops it with all @media). Same thresholds as Retention Studio.
+
 ## 0.9.8
 
 - AI panel: system font forced (MoEngage styles were turning it serif); the agent is shown as “Claude” / “Codex”, not “claude-code 2.1.316”.

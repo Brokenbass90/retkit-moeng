@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.8
+// @version      0.9.9
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3300,7 +3300,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.8</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.9</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3325,7 +3325,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.8',
+        version: '0.9.9',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4546,7 +4546,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.8 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.9 loaded');
   }
 
   boot();
@@ -6323,7 +6323,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.8',
+          clientVersion: '0.9.9',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8750,6 +8750,7 @@ module.exports = { isRtlLocale, applyRtl };
     senderChip: 'retkit-mo-sender-chip',
     senderPopover: 'retkit-mo-sender-popover',
     doctorButton: 'retkit-mo-doctor-button',
+    weightChip: 'retkit-mo-weight',
     doctorPopover: 'retkit-mo-doctor-popover',
     rtlButton: 'retkit-mo-rtl-button',
     testButton: 'retkit-mo-test-button',
@@ -9057,6 +9058,10 @@ module.exports = { isRtlLocale, applyRtl };
       #${IDS.senderChip}[data-state="empty"] { border-color:#b7791f; color:#f6c76b; background:#2a2112; }
       .rk-sender-field { display:grid; gap:4px; min-width:0; }
       .rk-sender-two { display:grid; grid-template-columns:1fr 1.4fr; gap:8px; }
+      #${IDS.weightChip} { margin-left:6px; padding:2px 8px; border-radius:10px; border:1px solid #334155; background:#111a26; color:#9fb0c6; font-size:11px; font-weight:600; white-space:nowrap; cursor:default; }
+      #${IDS.weightChip}[data-level="ok"] { color:#7ee2a8; border-color:rgba(85,207,145,.35); }
+      #${IDS.weightChip}[data-level="warn"] { color:#f0c46a; border-color:rgba(229,184,88,.45); }
+      #${IDS.weightChip}[data-level="clip"] { color:#ff8b8b; border-color:rgba(237,111,120,.55); background:rgba(237,111,120,.10); }
       #${IDS.doctorButton} { display:inline-flex; align-items:center; justify-content:center; gap:5px; padding-left:9px; padding-right:9px; }
       #${IDS.doctorButton}.rk-doc-joined { border-top-right-radius:0; border-bottom-right-radius:0; margin-right:0; }
       #${IDS.doctorButton}.rk-doc-joined + #retkit-diagnostics-button { border-top-left-radius:0; border-bottom-left-radius:0; border-left-color:transparent; margin-left:-1px; }
@@ -9185,7 +9190,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.8');
+    setTextContentIfChanged(version, 'v0.9.9');
     return true;
   }
 
@@ -11358,6 +11363,55 @@ module.exports = { isRtlLocale, applyRtl };
     nameInput.focus();
   }
 
+  // ── Вес письма ───────────────────────────────────────────────────────────
+  // Те же пороги, что в студии и сборке: от 102 КБ Gmail обрезает письмо
+  // («[Сообщение обрезано]»), 90–102 КБ — близко; <style> больше 16 КБ Gmail
+  // выбрасывает целиком вместе с @media.
+  const WEIGHT_KB = 1024;
+  const WEIGHT_WARN = 90 * WEIGHT_KB;
+  const WEIGHT_CLIP = 102 * WEIGHT_KB;
+  const WEIGHT_GMAIL_STYLE = 16 * WEIGHT_KB;
+  function utf8Bytes(text) {
+    const value = String(text || '');
+    try { return new TextEncoder().encode(value).length; } catch { return unescape(encodeURIComponent(value)).length; }
+  }
+  function measureEmailWeight(html) {
+    const text = String(html || '');
+    const bytes = utf8Bytes(text);
+    let styleBytes = 0;
+    text.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (all, css) => { styleBytes = Math.max(styleBytes, utf8Bytes(css)); return all; });
+    const kb = (n) => `${(n / WEIGHT_KB).toFixed(1).replace(/\.0$/, '')} КБ`;
+    const level = bytes >= WEIGHT_CLIP ? 'clip' : (bytes >= WEIGHT_WARN ? 'warn' : 'ok');
+    const lines = [
+      `Вес письма: ${kb(bytes)} · Gmail обрезает от ${kb(WEIGHT_CLIP)}${level === 'clip' ? ' — ЭТО ПИСЬМО ОБРЕЖЕТСЯ' : (level === 'warn' ? ' — близко к обрезке' : '')}`,
+      styleBytes ? `Самый большой <style>: ${kb(styleBytes)}${styleBytes > WEIGHT_GMAIL_STYLE ? ' — больше 16 КБ, Gmail выбросит его вместе с @media' : ' — Gmail его оставит'}` : '',
+      'MoEngage добавит трекинг к ссылкам — отправленное письмо будет немного тяжелее.',
+    ].filter(Boolean);
+    return { bytes, styleBytes, level: styleBytes > WEIGHT_GMAIL_STYLE && level === 'ok' ? 'warn' : level, label: `⚖ ${kb(bytes)}`, title: lines.join('\n') };
+  }
+  let weightGeneration = null;
+  function paintWeightChip() {
+    const head = document.querySelector(`#${IDS.workspace} #retkit-mo-editor-pane .rk-pane-head`)
+      || document.querySelector(`#${IDS.workspace} .rk-pane-head`);
+    if (!head) return;
+    let chip = document.getElementById(IDS.weightChip);
+    if (!chip) {
+      chip = document.createElement('span');
+      chip.id = IDS.weightChip;
+      head.querySelector('strong')?.insertAdjacentElement('afterend', chip) || head.appendChild(chip);
+      weightGeneration = null;
+    }
+    const cm = getOverlayEditor();
+    if (!cm) return;
+    const generation = cm.changeGeneration?.() ?? null;
+    if (generation !== null && generation === weightGeneration) return;
+    weightGeneration = generation;
+    const m = measureEmailWeight(cm.getValue());
+    chip.textContent = m.label;
+    chip.title = m.title;
+    chip.dataset.level = m.level;
+  }
+
   // ── Doctor ───────────────────────────────────────────────────────────────
   // Проходит по всем местам MoEngage, за которые держится RetKit, и говорит
   // PASS / FAIL / UNKNOWN. Только чтение: ничего не кликает и не пишет.
@@ -11532,6 +11586,7 @@ module.exports = { isRtlLocale, applyRtl };
       try { syncPreheaderFromMoEngage(force); } catch {}
       try { paintSenderChip(); } catch {}
     }
+    try { paintWeightChip(); } catch {}
     return changed;
   }
 
@@ -12875,7 +12930,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.8' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.9' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12901,7 +12956,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.8 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.9 loaded');
   }
 
   bootBridge();
