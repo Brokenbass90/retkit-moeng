@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.8
+
+- AI panel: system font forced (MoEngage styles were turning it serif); the agent is shown as “Claude” / “Codex”, not “claude-code 2.1.316”.
+
 ## 0.9.7
 
 - AI panel: proper font (was falling back to Times); plain step-by-step hints.

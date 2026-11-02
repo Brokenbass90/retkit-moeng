@@ -35,3 +35,5 @@ assert.match(relaySrc, /localStorage\?\.setItem\('retkit-agent-prompt'/);
 assert.match(relaySrc, /Date\.now\(\) - connectClickAt < 4500/);
 assert.match(panelSrc, /view\.action === 'connect' && agentState\?\.prompt\) add\('Скопировать для агента'/);
 console.log('✓ v0.9.6: copy without the window');
+assert.equal(agentView({ relay: 'on', agentSeenAt: now - 60000, client: 'claude-code 2.1.316' }, now).short, 'Claude · 1 мин назад');
+console.log('✓ v0.9.8: client name');
