@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.7
+
+- AI panel: proper font (was falling back to Times); plain step-by-step hints.
+
 ## 0.9.6
 
 - “Подключить AI” copies the text for the agent by itself once the link arrives — no second click. The text is remembered, so later “Скопировать для агента” works straight away, without the window.

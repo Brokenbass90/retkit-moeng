@@ -98,11 +98,11 @@
     if (state.relay === 'opening') return { tone: 'wait', title: 'Открываю окно связи…', short: 'Подключаю…', action: 'none' };
     if (state.relay !== 'on') {
       return { tone: 'idle', title: 'AI не подключён', short: 'AI не подключён', action: 'connect',
-        hint: 'Нажмите «Подключить AI» — откроется маленькое окно связи. Оно даст текст для вашего Claude или Codex.' };
+        hint: 'Нажмите «Подключить AI». Откроется маленькое окно — не закрывайте его, просто отодвиньте: через него агент видит это письмо. Текст для агента скопируется сам.' };
     }
     if (!recent) {
       return { tone: 'wait', title: 'Окно связи открыто · агент ещё не заходил', short: 'Ждём агента', action: 'copy',
-        hint: 'Скопируйте текст и вставьте его в чат своему Claude или Codex. Он подключится сам или скажет, куда нажать.' };
+        hint: 'Окно связи открыто. Вставьте текст из буфера в чат своему Claude или Codex (Cmd+V) — он подключится сам или скажет, куда нажать. Уже подключали раньше — просто напишите агенту «проверь».' };
     }
     return { tone: 'ok', title: `${client} подключён · был ${agoText(state.agentSeenAt, now)}`, short: `${client} · ${agoText(state.agentSeenAt, now)}`, action: 'copy',
       hint: 'Пишите агенту в Claude или Codex: «открой моё письмо в MoEngage». Здесь видно, что он делает. Сохраняете кампанию вы.' };
@@ -189,7 +189,8 @@
       .rk-agent-state { display:flex; align-items:center; gap:9px; color:#e8eef8; font-weight:650; font-size:13px; }
       .rk-agent-hint { color:#8fa2b8; margin:0; }
       .rk-agent-actions { display:flex; gap:8px; flex-wrap:wrap; }
-      .rk-agent-actions button { border-radius:8px; padding:7px 12px; cursor:pointer; font:600 12px inherit; }
+      #${IDS.panel}, #${IDS.panel} button, #${IDS.panel} input { font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .rk-agent-actions button { border-radius:8px; padding:7px 12px; cursor:pointer; font-size:12px; font-weight:600; }
       .rk-agent-primary { border:1px solid #4c75e7; background:#315be9; color:#fff; }
       .rk-agent-secondary { border:1px solid #334155; background:#172130; color:#dce6f4; }
       .rk-agent-feed { display:grid; gap:3px; }
