@@ -436,7 +436,10 @@
     const stateEl = box.querySelector('[data-state]');
     stateEl.dataset.tone = view.tone;
     stateEl.replaceChildren(Object.assign(document.createElement('span'), { className: 'rk-agent-dot' }), document.createTextNode(view.title));
-    box.querySelector('[data-hint]').textContent = view.hint || '';
+    const justCopied = Number(agentState?.copiedAt || 0) && Date.now() - Number(agentState.copiedAt) < 20000;
+    box.querySelector('[data-hint]').textContent = justCopied
+      ? '✓ Текст для агента в буфере обмена — вставьте его в чат Claude или Codex.'
+      : (view.hint || '');
     const actions = box.querySelector('[data-actions]');
     const key = `${view.action}|${Boolean(agentState?.prompt)}`;
     if (actions.dataset.key !== key) {
@@ -454,6 +457,8 @@
         setTimeout(() => { b.textContent = 'Скопировать для агента'; }, 2200);
       };
       if (view.action === 'connect') add('Подключить AI', 'rk-agent-primary', () => relay?.connect?.());
+      // Текст уже известен (был раньше) — копируем сразу, окно не нужно.
+      if (view.action === 'connect' && agentState?.prompt) add('Скопировать для агента', 'rk-agent-secondary', copy);
       if (view.action === 'copy' && agentState?.prompt) add('Скопировать для агента', view.tone === 'ok' ? 'rk-agent-secondary' : 'rk-agent-primary', copy);
       if (view.action !== 'connect') add('Окно связи', 'rk-agent-secondary', () => relay?.connect?.());
     }

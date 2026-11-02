@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.5
+// @version      0.9.6
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3300,7 +3300,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.5</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.6</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3325,7 +3325,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.5',
+        version: '0.9.6',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4546,7 +4546,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.5 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.6 loaded');
   }
 
   boot();
@@ -6323,7 +6323,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.5',
+          clientVersion: '0.9.6',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -6532,7 +6532,10 @@ module.exports = { isRtlLocale, applyRtl };
     relay: 'off',          // off | opening | on
     agentSeenAt: 0,        // когда агент последний раз заходил по личной ссылке (из студии)
     client: '',            // Claude / Codex — как он представился
-    prompt: '',            // текст «для агента»: ссылка + что делать
+    // Текст «для агента» (ссылка + что делать). Запоминаем в браузере: со
+    // второго раза он копируется сразу, без окна связи.
+    prompt: (() => { try { return root.localStorage?.getItem('retkit-agent-prompt') || ''; } catch { return ''; } })(),
+    copiedAt: 0,
     busy: false,
     lastActivityAt: 0,
     feed: [],              // что агент делал в этой вкладке
@@ -6578,6 +6581,7 @@ module.exports = { isRtlLocale, applyRtl };
   async function copyPrompt() {
     const text = agentState.prompt;
     if (!text) return false;
+    agentState.copiedAt = Date.now();
     try { await root.navigator.clipboard.writeText(text); return true; } catch {}
     try {
       const area = root.document.createElement('textarea');
@@ -6602,7 +6606,9 @@ module.exports = { isRtlLocale, applyRtl };
     if (!acked) post({ type: 'hello' });
   }
 
+  let connectClickAt = 0;
   function connect() {
+    connectClickAt = Date.now();
     const url = `${studioUrl()}/relay.html`;
     relayOrigin = new URL(url).origin;
     // Named window: a second press, or RetKit after a page reload, finds the
@@ -6625,7 +6631,14 @@ module.exports = { isRtlLocale, applyRtl };
     if (msg.type === 'hello-ack') { acked = true; setButton('on'); return; }
     if (msg.type === 'link') {
       // Окно студии знает личную ссылку и когда агент по ней заходил.
-      agentState.prompt = String(msg.prompt || '');
+      agentState.prompt = String(msg.prompt || '') || agentState.prompt;
+      try { if (agentState.prompt) root.localStorage?.setItem('retkit-agent-prompt', agentState.prompt); } catch {}
+      // Сразу после «Подключить AI» копируем текст сами — второй клик не нужен.
+      // Браузер разрешает это лишь пару секунд после клика; не вышло — кнопка останется.
+      if (connectClickAt && Date.now() - connectClickAt < 4500 && agentState.prompt) {
+        connectClickAt = 0;
+        copyPrompt().then((ok) => { if (ok) { agentState.copiedAt = Date.now(); emitState(); } });
+      }
       agentState.agentSeenAt = Number(msg.lastSeenAt || 0) || agentState.agentSeenAt;
       agentState.client = String(msg.lastClient || agentState.client || '');
       if (!acked) { acked = true; agentState.relay = 'on'; }
@@ -7978,7 +7991,10 @@ module.exports = { isRtlLocale, applyRtl };
     const stateEl = box.querySelector('[data-state]');
     stateEl.dataset.tone = view.tone;
     stateEl.replaceChildren(Object.assign(document.createElement('span'), { className: 'rk-agent-dot' }), document.createTextNode(view.title));
-    box.querySelector('[data-hint]').textContent = view.hint || '';
+    const justCopied = Number(agentState?.copiedAt || 0) && Date.now() - Number(agentState.copiedAt) < 20000;
+    box.querySelector('[data-hint]').textContent = justCopied
+      ? '✓ Текст для агента в буфере обмена — вставьте его в чат Claude или Codex.'
+      : (view.hint || '');
     const actions = box.querySelector('[data-actions]');
     const key = `${view.action}|${Boolean(agentState?.prompt)}`;
     if (actions.dataset.key !== key) {
@@ -7996,6 +8012,8 @@ module.exports = { isRtlLocale, applyRtl };
         setTimeout(() => { b.textContent = 'Скопировать для агента'; }, 2200);
       };
       if (view.action === 'connect') add('Подключить AI', 'rk-agent-primary', () => relay?.connect?.());
+      // Текст уже известен (был раньше) — копируем сразу, окно не нужно.
+      if (view.action === 'connect' && agentState?.prompt) add('Скопировать для агента', 'rk-agent-secondary', copy);
       if (view.action === 'copy' && agentState?.prompt) add('Скопировать для агента', view.tone === 'ok' ? 'rk-agent-secondary' : 'rk-agent-primary', copy);
       if (view.action !== 'connect') add('Окно связи', 'rk-agent-secondary', () => relay?.connect?.());
     }
@@ -9164,7 +9182,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.5');
+    setTextContentIfChanged(version, 'v0.9.6');
     return true;
   }
 
@@ -12854,7 +12872,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.5' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.6' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12880,7 +12898,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.5 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.6 loaded');
   }
 
   bootBridge();

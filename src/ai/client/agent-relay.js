@@ -131,7 +131,10 @@
     relay: 'off',          // off | opening | on
     agentSeenAt: 0,        // когда агент последний раз заходил по личной ссылке (из студии)
     client: '',            // Claude / Codex — как он представился
-    prompt: '',            // текст «для агента»: ссылка + что делать
+    // Текст «для агента» (ссылка + что делать). Запоминаем в браузере: со
+    // второго раза он копируется сразу, без окна связи.
+    prompt: (() => { try { return root.localStorage?.getItem('retkit-agent-prompt') || ''; } catch { return ''; } })(),
+    copiedAt: 0,
     busy: false,
     lastActivityAt: 0,
     feed: [],              // что агент делал в этой вкладке
@@ -177,6 +180,7 @@
   async function copyPrompt() {
     const text = agentState.prompt;
     if (!text) return false;
+    agentState.copiedAt = Date.now();
     try { await root.navigator.clipboard.writeText(text); return true; } catch {}
     try {
       const area = root.document.createElement('textarea');
@@ -201,7 +205,9 @@
     if (!acked) post({ type: 'hello' });
   }
 
+  let connectClickAt = 0;
   function connect() {
+    connectClickAt = Date.now();
     const url = `${studioUrl()}/relay.html`;
     relayOrigin = new URL(url).origin;
     // Named window: a second press, or RetKit after a page reload, finds the
@@ -224,7 +230,14 @@
     if (msg.type === 'hello-ack') { acked = true; setButton('on'); return; }
     if (msg.type === 'link') {
       // Окно студии знает личную ссылку и когда агент по ней заходил.
-      agentState.prompt = String(msg.prompt || '');
+      agentState.prompt = String(msg.prompt || '') || agentState.prompt;
+      try { if (agentState.prompt) root.localStorage?.setItem('retkit-agent-prompt', agentState.prompt); } catch {}
+      // Сразу после «Подключить AI» копируем текст сами — второй клик не нужен.
+      // Браузер разрешает это лишь пару секунд после клика; не вышло — кнопка останется.
+      if (connectClickAt && Date.now() - connectClickAt < 4500 && agentState.prompt) {
+        connectClickAt = 0;
+        copyPrompt().then((ok) => { if (ok) { agentState.copiedAt = Date.now(); emitState(); } });
+      }
       agentState.agentSeenAt = Number(msg.lastSeenAt || 0) || agentState.agentSeenAt;
       agentState.client = String(msg.lastClient || agentState.client || '');
       if (!acked) { acked = true; agentState.relay = 'on'; }

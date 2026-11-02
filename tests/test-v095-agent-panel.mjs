@@ -30,3 +30,8 @@ assert.match(panelSrc, /if \(!localMode\(\)\) return mountAgentPanel/);
 // Кнопки «Агент» в верхней панели больше нет.
 assert.match(relaySrc, /getElementById\('retkit-agent-button'\)\?\.remove\(\)/);
 console.log('✓ v0.9.5: agent panel');
+// v0.9.6: текст «для агента» запоминается и копируется без окна; после «Подключить AI» — сам.
+assert.match(relaySrc, /localStorage\?\.setItem\('retkit-agent-prompt'/);
+assert.match(relaySrc, /Date\.now\(\) - connectClickAt < 4500/);
+assert.match(panelSrc, /view\.action === 'connect' && agentState\?\.prompt\) add\('Скопировать для агента'/);
+console.log('✓ v0.9.6: copy without the window');

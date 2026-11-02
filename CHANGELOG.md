@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.6
+
+- “Подключить AI” copies the text for the agent by itself once the link arrives — no second click. The text is remembered, so later “Скопировать для агента” works straight away, without the window.
+
 ## 0.9.5
 
 - AI panel no longer has a chat box. You talk to Claude or Codex in their own app; RetKit shows one status (not connected / waiting for the agent / Claude connected · seen N min ago / working…), a “Copy for the agent” button (link + what to do) and a feed of what the agent did in this tab. The status no longer changes when the panel is collapsed and reopened.
