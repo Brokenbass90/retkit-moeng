@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.2
+// @version      0.9.3
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1734,6 +1734,25 @@
     flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
+    // Doctor: только чтение, ничего не кликает и не пишет.
+    doctorProbe: () => {
+      try {
+        return {
+          workspaceOpen: Boolean(document.getElementById(IDS.workspace)),
+          nativeEditor: Boolean(getNativeEditor()),
+          nativeLength: String(getNativeEditor()?.getValue?.() || '').length,
+          codeViewButton: Boolean(getCodeViewButton()),
+          renderedLength: String(getRenderedPreviewHtml() || '').length,
+          boundLocale: String(STATE.boundLocale || ''),
+          dirty: Boolean(STATE.dirty),
+          applying: Boolean(STATE.applying),
+          nativeBodyEmpty: Boolean(STATE.nativeBodyEmpty),
+          multiLocaleBusy: Boolean(STATE.multiLocaleBusy),
+        };
+      } catch (error) {
+        return { error: String(error?.message || error) };
+      }
+    },
     // Мост ходит по локалям сам (отправитель на все локали) — на это время
     // ядро не пишет и не подтягивает HTML, как при замене по локалям.
     setMultiLocaleBusy: (value, message) => { try { setMultiLocaleBusy(value, message); } catch {} },
@@ -3281,7 +3300,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.2</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.3</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3306,7 +3325,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.2',
+        version: '0.9.3',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4527,7 +4546,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.2 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.3 loaded');
   }
 
   boot();
@@ -6304,7 +6323,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.2',
+          clientVersion: '0.9.3',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8474,6 +8493,8 @@ module.exports = { isRtlLocale, applyRtl };
     preheaderInput: 'retkit-mo-preheader-input',
     senderChip: 'retkit-mo-sender-chip',
     senderPopover: 'retkit-mo-sender-popover',
+    doctorButton: 'retkit-mo-doctor-button',
+    doctorPopover: 'retkit-mo-doctor-popover',
     rtlButton: 'retkit-mo-rtl-button',
     testButton: 'retkit-mo-test-button',
     originalButton: 'retkit-mo-original-button',
@@ -8780,6 +8801,24 @@ module.exports = { isRtlLocale, applyRtl };
       #${IDS.senderChip}[data-state="empty"] { border-color:#b7791f; color:#f6c76b; background:#2a2112; }
       .rk-sender-field { display:grid; gap:4px; min-width:0; }
       .rk-sender-two { display:grid; grid-template-columns:1fr 1.4fr; gap:8px; }
+      #${IDS.doctorButton} { display:inline-flex; align-items:center; gap:6px; }
+      #${IDS.doctorButton} .rk-doc-dot { width:8px; height:8px; border-radius:50%; background:#5b6b80; }
+      #${IDS.doctorButton}[data-state="pass"] .rk-doc-dot { background:#55cf91; }
+      #${IDS.doctorButton}[data-state="unknown"] .rk-doc-dot { background:#e5b858; }
+      #${IDS.doctorButton}[data-state="fail"] .rk-doc-dot { background:#ed6f78; box-shadow:0 0 0 3px rgba(237,111,120,.18); }
+      #${IDS.doctorPopover} { width:min(520px,calc(100vw - 24px)); }
+      .rk-doc-summary { display:flex; gap:10px; font-size:12px; color:#9fb0c6; margin-bottom:8px; }
+      .rk-doc-summary b { color:#dce6f4; }
+      .rk-doc-list { display:grid; gap:2px; }
+      .rk-doc-row { display:grid; grid-template-columns:74px 1fr; gap:10px; padding:7px 8px; border-radius:8px; font-size:12px; line-height:1.35; }
+      .rk-doc-row:nth-child(odd) { background:#0d141e; }
+      .rk-doc-badge { align-self:start; text-align:center; font:700 10px/1 Inter,ui-sans-serif,sans-serif; letter-spacing:.04em; padding:4px 0; border-radius:6px; }
+      .rk-doc-badge[data-s="PASS"] { color:#7ee2a8; background:rgba(85,207,145,.12); }
+      .rk-doc-badge[data-s="FAIL"] { color:#ff8b8b; background:rgba(237,111,120,.14); }
+      .rk-doc-badge[data-s="UNKNOWN"] { color:#f0c46a; background:rgba(229,184,88,.12); }
+      .rk-doc-name { color:#e9eef7; font-weight:600; }
+      .rk-doc-detail { color:#8293a8; }
+      .rk-doc-hint { color:#c9d4e3; margin-top:2px; }
       #${IDS.senderPopover} select.rk-v050-select { -webkit-appearance:none; appearance:none; width:100%; min-height:34px; padding:6px 28px 6px 9px; border:1px solid #334155; border-radius:8px; color:#e9eef7; font:500 12px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; cursor:pointer;
         background:#0b111a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238293a8' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center; text-overflow:ellipsis; }
       #${IDS.senderPopover} select.rk-v050-select:hover { border-color:#4f7cff; }
@@ -8887,7 +8926,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.2');
+    setTextContentIfChanged(version, 'v0.9.3');
     return true;
   }
 
@@ -8903,7 +8942,7 @@ module.exports = { isRtlLocale, applyRtl };
   }
 
   function closeBridgePopovers(except = '') {
-    for (const id of [IDS.testPopover, IDS.originalPopover, IDS.senderPopover]) {
+    for (const id of [IDS.testPopover, IDS.originalPopover, IDS.senderPopover, IDS.doctorPopover]) {
       if (id !== except) document.getElementById(id)?.remove();
     }
   }
@@ -8985,6 +9024,7 @@ module.exports = { isRtlLocale, applyRtl };
       document.getElementById(IDS.workspace)?.contains(element) ||
       document.getElementById(IDS.testPopover)?.contains?.(element) ||
       document.getElementById(IDS.senderPopover)?.contains?.(element) ||
+      document.getElementById(IDS.doctorPopover)?.contains?.(element) ||
       document.getElementById(IDS.addLocalePopover)?.contains?.(element) ||
       document.getElementById(IDS.localeLoading)?.contains?.(element) ||
       document.getElementById('retkit-mo-launcher')?.contains?.(element)
@@ -11059,6 +11099,155 @@ module.exports = { isRtlLocale, applyRtl };
     nameInput.focus();
   }
 
+  // ── Doctor ───────────────────────────────────────────────────────────────
+  // Проходит по всем местам MoEngage, за которые держится RetKit, и говорит
+  // PASS / FAIL / UNKNOWN. Только чтение: ничего не кликает и не пишет.
+  // UNKNOWN — «сейчас не видно» (свёрнут блок, другая под-вкладка), не поломка.
+  function doctorSummary(checks = []) {
+    const count = (s) => checks.filter((c) => c.status === s).length;
+    const fail = count('FAIL');
+    const unknown = count('UNKNOWN');
+    return { pass: count('PASS'), fail, unknown, state: fail ? 'fail' : (unknown ? 'unknown' : 'pass') };
+  }
+
+  function runDoctor() {
+    const checks = [];
+    const add = (id, label, status, detail = '', hint = '') => checks.push({ id, label, status, detail, hint });
+    const probe = root.__RetKitMoEngageCore?.doctorProbe?.() || { error: 'RetKit core is not loaded' };
+    if (probe.error) add('core', 'Ядро RetKit', 'FAIL', probe.error, 'Перезагрузите страницу; если не помогло — переустановите расширение.');
+
+    add('editor', 'Редактор кода MoEngage', probe.nativeEditor ? 'PASS' : 'FAIL',
+      probe.nativeEditor ? `${Math.round((probe.nativeLength || 0) / 1024)} КБ HTML` : 'CodeMirror не найден',
+      probe.nativeEditor ? '' : 'Откройте шаг с Template Editor и включите режим кода </>.');
+    add('codeview', 'Кнопка Code View', probe.codeViewButton ? 'PASS' : 'FAIL',
+      probe.codeViewButton ? 'через неё RetKit сохраняет правки' : 'кнопка </> редактора не найдена',
+      probe.codeViewButton ? '' : 'Без неё правки не дойдут до MoEngage. Прокрутите к Template Editor.');
+    add('body', 'Письмо в MoEngage не пустое', probe.nativeBodyEmpty ? 'FAIL' : (probe.nativeEditor ? 'PASS' : 'UNKNOWN'),
+      probe.nativeBodyEmpty ? 'код пустой, а превью с письмом' : '',
+      probe.nativeBodyEmpty ? 'Перезагрузите страницу и откройте локаль заново. Ничего не сохраняйте.' : '');
+    add('preview', 'Превью MoEngage', probe.renderedLength ? 'PASS' : 'UNKNOWN',
+      probe.renderedLength ? 'RetKit показывает рендер MoEngage' : 'превью ещё не готово',
+      probe.renderedLength ? '' : 'RetKit покажет локальное превью; это не мешает правкам.');
+
+    let tabs = [];
+    try { tabs = sortLocalesForUi(discoverNativeLocales()); } catch {}
+    add('locales', 'Вкладки локалей', tabs.length ? 'PASS' : 'FAIL', tabs.length ? tabs.map(localeUiLabel).join(', ') : 'не найдены',
+      tabs.length ? '' : 'Прокрутите страницу к вкладкам Default / ar_KW… или перезагрузите её.');
+    const tab = (() => { try { return displayLocale(getNativeSelectedLocale() || ''); } catch { return ''; } })();
+    const bound = displayLocale(probe.boundLocale || '');
+    if (probe.workspaceOpen) {
+      const same = !tab || !bound || tab === bound || localeLanguage(tab) === localeLanguage(bound);
+      add('bound', 'RetKit и MoEngage на одной локали', !tab ? 'UNKNOWN' : (same ? 'PASS' : 'FAIL'),
+        tab ? `MoEngage: ${localeUiLabel(tab)} · RetKit: ${localeUiLabel(bound) || '—'}` : 'вкладка MoEngage не распознана',
+        same ? '' : 'Нажмите нужную локаль в строке LOCALES RetKit — он перечитает её.');
+    }
+
+    const field = (key, label, hintIfMissing) => {
+      const el = key === 'subject' ? findNativeSubjectInput() : (key === 'connector' ? senderDropdown('connector') : findNativeField(key));
+      const value = key === 'connector' || key === 'fromEmail' ? dropdownValue(key === 'fromEmail' ? senderDropdown('from') : el) : readNativeValue(el).trim();
+      add(`field-${key}`, label, el ? 'PASS' : 'UNKNOWN', el ? (value ? `«${value.slice(0, 60)}»` : 'пусто') : 'не видно на странице', el ? '' : hintIfMissing);
+    };
+    const senderHint = 'Разверните Email details → Sender Details в MoEngage.';
+    field('subject', 'Subject', senderHint);
+    field('preview', 'Preheader (Preview Text)', senderHint);
+    field('senderName', 'Sender Name', senderHint);
+    field('connector', 'Email Connector', senderHint);
+    field('fromEmail', 'From email', senderHint);
+    field('replyTo', 'Reply-to', senderHint);
+    const senderEmpty = findNativeField('senderName') && !readNativeValue(findNativeField('senderName')).trim();
+    if (senderEmpty) add('sender-empty', 'Sender Name заполнен', 'FAIL', 'пусто — MoEngage не отправит', 'Кнопка отправителя в строке Subject → пресет → Apply.');
+
+    add('test', 'Блок Test Campaign', findTestCampaignSection() ? 'PASS' : 'UNKNOWN', findTestCampaignSection() ? 'Send test готов' : 'не видно',
+      findTestCampaignSection() ? '' : 'Нужен только для Send test: он ниже на странице MoEngage.');
+    add('sync', 'Правки дошли до MoEngage', probe.applying || probe.multiLocaleBusy ? 'UNKNOWN' : (probe.dirty ? 'FAIL' : 'PASS'),
+      probe.applying ? 'идёт запись' : (probe.multiLocaleBusy ? 'идёт работа по локалям' : (probe.dirty ? 'есть несохранённая правка' : 'всё записано')),
+      probe.dirty && !probe.applying ? 'Подождите 2–3 с или сделайте паузу в наборе. Не держит дольше — смотрите Logs.' : '');
+    add('originals', 'Хранилище «Original»', root.__RetKitOriginals ? 'PASS' : 'UNKNOWN', root.__RetKitOriginals ? 'можно вернуть исходное письмо' : 'не загружено',
+      root.__RetKitOriginals ? '' : 'Кнопка ↶ Original не будет работать в этой вкладке.');
+    let storageOk = false;
+    try { localStorage.setItem('retkit-doctor-probe', '1'); localStorage.removeItem('retkit-doctor-probe'); storageOk = true; } catch {}
+    add('storage', 'Память браузера (пресеты)', storageOk ? 'PASS' : 'FAIL', storageOk ? '' : 'localStorage недоступен',
+      storageOk ? '' : 'Пресеты отправителя не сохранятся. Проверьте, не режим ли инкогнито.');
+
+    const summary = doctorSummary(checks);
+    diagBreadcrumb('doctor.run', { pass: summary.pass, fail: summary.fail, unknown: summary.unknown, failed: checks.filter((c) => c.status === 'FAIL').map((c) => c.id) });
+    return { checks, summary, at: new Date().toISOString() };
+  }
+
+  function doctorReportText(result) {
+    const version = textOf(document.querySelector(`#${IDS.workspace} .rk-version`)) || '';
+    const lines = [`RetKit Doctor ${version} · ${result.at}`, `${location.origin}${location.pathname}`,
+      `PASS ${result.summary.pass} · FAIL ${result.summary.fail} · UNKNOWN ${result.summary.unknown}`, ''];
+    for (const c of result.checks) lines.push(`${c.status.padEnd(7)} ${c.label}${c.detail ? ` — ${c.detail}` : ''}${c.hint ? `\n        → ${c.hint}` : ''}`);
+    return lines.join('\n');
+  }
+
+  function paintDoctorButton(result) {
+    const button = document.getElementById(IDS.doctorButton);
+    if (!button || !result) return;
+    button.dataset.state = result.summary.state;
+    button.title = `Doctor: PASS ${result.summary.pass} · FAIL ${result.summary.fail} · UNKNOWN ${result.summary.unknown}\nПроверка всех мест MoEngage, с которыми работает RetKit`;
+  }
+
+  function renderDoctorPopover() {
+    const existing = document.getElementById(IDS.doctorPopover);
+    if (existing) { existing.remove(); return; }
+    closeBridgePopovers(IDS.doctorPopover);
+    const pop = document.createElement('div');
+    pop.id = IDS.doctorPopover;
+    pop.className = 'rk-v050-popover';
+    pop.innerHTML = `
+      <div class="rk-v050-head"><strong>Doctor</strong><button class="rk-v050-secondary" data-close>×</button></div>
+      <div class="rk-doc-summary" data-summary></div>
+      <div class="rk-doc-list" data-list></div>
+      <div class="rk-sender-actions">
+        <button class="rk-v050-secondary" type="button" data-copy>Скопировать отчёт</button>
+        <button class="rk-v050-primary" type="button" data-run>Проверить снова</button>
+      </div>`;
+    let last = null;
+    const paint = () => {
+      last = runDoctor();
+      paintDoctorButton(last);
+      const s = last.summary;
+      pop.querySelector('[data-summary]').innerHTML = `<span><b>${s.pass}</b> PASS</span><span><b>${s.fail}</b> FAIL</span><span><b>${s.unknown}</b> UNKNOWN</span>`;
+      const list = pop.querySelector('[data-list]');
+      list.replaceChildren();
+      const order = { FAIL: 0, UNKNOWN: 1, PASS: 2 };
+      for (const c of [...last.checks].sort((a, b2) => order[a.status] - order[b2.status])) {
+        const row = document.createElement('div');
+        row.className = 'rk-doc-row';
+        const badge = document.createElement('span');
+        badge.className = 'rk-doc-badge';
+        badge.dataset.s = c.status;
+        badge.textContent = c.status;
+        const body = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'rk-doc-name';
+        name.textContent = c.label;
+        body.appendChild(name);
+        if (c.detail) { const d = document.createElement('div'); d.className = 'rk-doc-detail'; d.textContent = c.detail; body.appendChild(d); }
+        if (c.hint) { const h = document.createElement('div'); h.className = 'rk-doc-hint'; h.textContent = `→ ${c.hint}`; body.appendChild(h); }
+        row.append(badge, body);
+        list.appendChild(row);
+      }
+    };
+    pop.querySelector('[data-close]').addEventListener('click', () => pop.remove());
+    pop.querySelector('[data-run]').addEventListener('click', paint);
+    pop.querySelector('[data-copy]').addEventListener('click', async () => {
+      const text = doctorReportText(last || runDoctor());
+      try { await navigator.clipboard.writeText(text); workspaceStatus('Отчёт Doctor в буфере обмена', 'ok'); }
+      catch { workspaceStatus('Не удалось скопировать отчёт', 'error'); }
+    });
+    document.getElementById(IDS.workspace)?.appendChild(pop) || document.body.appendChild(pop);
+    paint();
+  }
+
+  let doctorTimer = null;
+  function scheduleSilentDoctor(delay = 2500) {
+    clearTimeout(doctorTimer);
+    doctorTimer = setTimeout(() => { try { paintDoctorButton(runDoctor()); } catch {} }, delay);
+  }
+
   function syncSubjectFromMoEngage(force = false) {
     const changed = syncSubjectOnlyFromMoEngage(force);
     if (!root.__RetKitMoEngageCore?.isMultiLocaleBusy?.()) {
@@ -12035,6 +12224,15 @@ module.exports = { isRtlLocale, applyRtl };
       const button = makeToolbarButton(IDS.testButton, 'Send test', handOffNativeTestCampaign, 'Open the native MoEngage Test Campaign form');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
     }
+    if (!document.getElementById(IDS.doctorButton)) {
+      const button = makeToolbarButton(IDS.doctorButton, 'Doctor', renderDoctorPopover, 'Проверка всех мест MoEngage, с которыми работает RetKit');
+      const dot = document.createElement('span');
+      dot.className = 'rk-doc-dot';
+      button.prepend(dot);
+      bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
+      // Тихая проверка после открытия: точка сразу показывает, всё ли на месте.
+      scheduleSilentDoctor(2500);
+    }
 
     let row = document.getElementById(IDS.localeRow);
     if (!row) {
@@ -12209,6 +12407,7 @@ module.exports = { isRtlLocale, applyRtl };
   root.__RetKitMoEngageBridgeApi = {
     getActiveLocale,
     readSender: () => readNativeSender(),
+    runDoctor: () => runDoctor(),
     applySender: (value, locales) => applySenderToLocales(value, locales),
     // Только вкладка MoEngage, без подсказок из текста редактора RetKit.
     getNativeTabLocale: () => { try { return displayLocale(getNativeSelectedLocale() || ''); } catch { return ''; } },
@@ -12388,7 +12587,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.2' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.9.3' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12414,7 +12613,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.2 loaded');
+    console.log('[RetKit] MoEngage bridge v0.9.3 loaded');
   }
 
   bootBridge();

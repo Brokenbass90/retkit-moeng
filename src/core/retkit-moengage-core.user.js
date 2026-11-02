@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.2
+// @version      0.9.3
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -966,6 +966,25 @@
     flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
+    // Doctor: только чтение, ничего не кликает и не пишет.
+    doctorProbe: () => {
+      try {
+        return {
+          workspaceOpen: Boolean(document.getElementById(IDS.workspace)),
+          nativeEditor: Boolean(getNativeEditor()),
+          nativeLength: String(getNativeEditor()?.getValue?.() || '').length,
+          codeViewButton: Boolean(getCodeViewButton()),
+          renderedLength: String(getRenderedPreviewHtml() || '').length,
+          boundLocale: String(STATE.boundLocale || ''),
+          dirty: Boolean(STATE.dirty),
+          applying: Boolean(STATE.applying),
+          nativeBodyEmpty: Boolean(STATE.nativeBodyEmpty),
+          multiLocaleBusy: Boolean(STATE.multiLocaleBusy),
+        };
+      } catch (error) {
+        return { error: String(error?.message || error) };
+      }
+    },
     // Мост ходит по локалям сам (отправитель на все локали) — на это время
     // ядро не пишет и не подтягивает HTML, как при замене по локалям.
     setMultiLocaleBusy: (value, message) => { try { setMultiLocaleBusy(value, message); } catch {} },
@@ -2513,7 +2532,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.2</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.3</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2538,7 +2557,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.2',
+        version: '0.9.3',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3759,7 +3778,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.2 loaded');
+    console.log('[RetKit] MoEngage workspace v0.9.3 loaded');
   }
 
   boot();

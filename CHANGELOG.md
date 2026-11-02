@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.3
+
+- Doctor: one button checks every MoEngage spot RetKit relies on (code editor, Code View, locale tabs, Subject, Preheader, Sender, Connector, From, Reply-to, Test Campaign, sync state, storage) and says PASS / FAIL / UNKNOWN with what to do. Read-only. A silent run after opening colours the dot on the button; “Copy report” for bug reports.
+
 ## 0.9.2
 
 - Sender window: group headers in MoEngage lists (bold "Sendgrid" above "IQOption") are no longer offered as a connector; the current value is always the selected one; a list with one choice is shown but locked.
