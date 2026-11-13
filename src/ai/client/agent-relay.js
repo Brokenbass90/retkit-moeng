@@ -116,6 +116,11 @@
       return { ...plan, note: args?.replacement !== undefined ? 'Замена подготовлена и показана человеку — нажимает он.' : undefined };
     }
     if (tool === 'validator') { requireWorkspace(); return { issues: ws().getValidatorIssues?.() || [] }; }
+    if (tool === 'lint_locales') {
+      requireWorkspace();
+      if (typeof ws().lintLocales !== 'function') throw new Error('Проверка локалей недоступна в этой версии RetKit');
+      return ws().lintLocales({ walk: args?.walk !== false, detail: args?.detail || 'errors', locale: args?.locale || '' });
+    }
     throw new Error(`Неизвестная команда: ${tool}`);
   }
 
@@ -165,6 +170,7 @@
     switch_locale: 'переключил локаль',
     find_across_locales: 'искал по локалям',
     validator: 'проверил ошибки HTML',
+    lint_locales: 'проверил локали',
   };
   function feedText(tool, args, reply) {
     const locale = normLocale(reply?.result?.locale || args?.locale || '');

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.0
+
+- Locale check (`src/shared/locale-lint.js`, the same file Retention Studio uses): every locale against EN — wrong language or alphabet, untranslated text, missing text, changed {{variables}}, draft junk (lorem ipsum, TODO, “Title text”, [translate]…), broken encoding. Locale tabs get a red/yellow dot with the reasons in the tooltip; “🌐 Locales” walks all locales and lists issues (click → that locale). Offline: trigram models from franc (MIT), trimmed to RetKit languages.
+- Agents: `lint_locales` (relay, bridge, MCP `moengage_lint_locales`) — one summary line, one line per error, `unchanged` when nothing changed.
+
 ## 0.9.9
 
 - Email weight next to “HTML”: ⚖ size in KB, green / yellow from 90 KB / red from 102 KB (Gmail clips the email), warning when a <style> is over 16 KB (Gmail drops it with all @media). Same thresholds as Retention Studio.

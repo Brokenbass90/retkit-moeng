@@ -12,6 +12,8 @@ const distPath = path.join(root, 'dist/retkit-moengage.user.js');
 
 const aiModulePaths = [
   'src/shared/replace-across.js',
+  'src/shared/locale-lint-data.js',
+  'src/shared/locale-lint.js',
   'src/shared/rtl-core.js',
   'src/backup/original-snapshots.js',
   'src/ai/shared/protocol.js',

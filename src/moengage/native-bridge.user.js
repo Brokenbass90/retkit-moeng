@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.9
+// @version      0.10.0
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -1104,7 +1104,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.9');
+    setTextContentIfChanged(version, 'v0.10.0');
     return true;
   }
 
@@ -2489,6 +2489,7 @@
       const tab = document.createElement('button');
       tab.type = 'button';
       tab.className = `rk-v052-locale-tab${locale === active ? ' rk-active' : ''}`;
+      tab.dataset.rkLocale = String(locale).toUpperCase();
       tab.textContent = localeUiLabel(locale);
       tab.title = `Switch MoEngage to ${locale}`;
       tab.addEventListener('click', async () => {
@@ -2558,6 +2559,8 @@
       hint.textContent = 'Locales…';
       strip.appendChild(hint);
     }
+    // Red/yellow dots of the locale check (src/shared/locale-lint.js) survive re-renders.
+    try { root.__RetKitMoEngageCore?.applyLocaleLintMarks?.(); } catch {}
   }
 
   function findByExactText(rootNode, labels, selector = 'button,[role="button"],a,span,div,label') {
@@ -4844,7 +4847,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.9' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.10.0' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -4870,7 +4873,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.9 loaded');
+    console.log('[RetKit] MoEngage bridge v0.10.0 loaded');
   }
 
   bootBridge();

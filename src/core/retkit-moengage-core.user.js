@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.9
+// @version      0.10.0
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -964,6 +964,7 @@
     shouldTreatNativeMismatchAsLateRevert,
     rebindNativeEditorFromMoEngage,
     flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
+    applyLocaleLintMarks: () => applyLocaleLintMarks(),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
     // Doctor: только чтение, ничего не кликает и не пишет.
@@ -1021,9 +1022,16 @@
     multiLocaleRows: 'retkit-mo-multilocale-rows',
     localeManagerRows: 'retkit-mo-locale-manager-rows',
     localeStrip: 'retkit-mo-locale-strip',
+    localeLintButton: 'retkit-mo-locale-lint-button',
+    localeLintPopover: 'retkit-mo-locale-lint-popover',
   };
 
   const STATE = {
+    // Locale lint (src/shared/locale-lint.js): HTML of locales RetKit has seen, and the verdict.
+    localeHtmlCache: {},
+    localeLint: null,
+    localeLintKey: '',
+    localeLintTimer: null,
     wrap: localStorage.getItem('retkit-mo-wrap') !== 'false',
     previewMode: localStorage.getItem('retkit-mo-preview-mode') || 'desktop',
     splitPercent: Number(localStorage.getItem('retkit-mo-split') || 50),
@@ -1430,6 +1438,13 @@
       .rk-issue-severity[data-severity="error"] { background:#ff737d; }
       .rk-issue-severity[data-severity="warning"] { background:#f4be63; }
       .rk-issue-line { color:#7f91a7; margin-left:auto; white-space:nowrap; }
+      .rk-v052-locale-tab[data-rk-lint="error"] { color:#ff8a92; }
+      .rk-v052-locale-tab[data-rk-lint="error"]::before, .rk-v052-locale-tab[data-rk-lint="warn"]::before { content:""; position:absolute; top:4px; right:2px; width:6px; height:6px; border-radius:50%; background:#ff4d5a; }
+      .rk-v052-locale-tab[data-rk-lint="warn"]::before { background:#f4be63; }
+      #retkit-mo-locale-lint-button.rk-lint-error { color:#ff8a92; }
+      #retkit-mo-locale-lint-button.rk-lint-warn { color:#f4be63; }
+      #retkit-mo-locale-lint-button.rk-lint-ok { color:#72d6a0; }
+      .rk-lint-summary { color:#9fb0c6; font-size:11px; padding:6px 8px; border-bottom:1px solid #202b39; }
     `;
     document.head.appendChild(style);
   }
@@ -1932,6 +1947,7 @@
         const read = await readLocaleForWalk(bridge, locale, previous);
         htmlByLocale[locale] = String(read.html || '');
       }
+      rememberLocaleHtmlMap(htmlByLocale, locales);
       if (String(document.getElementById(IDS.findInput)?.value || '') !== query) {
         // The query changed mid-walk: this result is stale, wait for the button.
         return;
@@ -2423,13 +2439,14 @@
   }
 
   function closeFloatingPopovers(exceptId = '') {
-    for (const id of [IDS.validatorPopover]) {
+    for (const id of [IDS.validatorPopover, IDS.localeLintPopover]) {
       if (id !== exceptId) document.getElementById(id)?.remove();
     }
   }
 
   function updateValidatorStatus() {
     const html = STATE.overlayEditor?.getValue() || '';
+    rememberActiveLocaleHtml(html);
     STATE.validatorIssues = validateEmailHtml(html);
     const button = document.getElementById(IDS.validatorButton);
     const errors = STATE.validatorIssues.filter((issue) => issue.severity === 'error');
@@ -2532,7 +2549,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.9</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.0</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2557,12 +2574,16 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.9',
+        version: '0.10.0',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
     const diagnosticsButton = document.getElementById('retkit-diagnostics-button');
     bar.insertBefore(validatorBtn, diagnosticsButton || spacer);
+    const lintBtn = makeButton('🌐 Locales', () => renderLocaleLintPopover(false), { title: 'Проверка локалей: язык, перевод, пропуски, черновой мусор' });
+    lintBtn.id = IDS.localeLintButton;
+    bar.insertBefore(lintBtn, diagnosticsButton || spacer);
+    applyLocaleLintMarks();
     try { root.__RetKitAgentRelay?.ensureUi?.(workspace); } catch {}
   }
 
@@ -3581,6 +3602,7 @@
   // left with its empty skeleton (<head><style> + empty <body>) — logs
   // 2026-10-07/08: every "nativeLength 417" rejection followed a Close.
   async function closeWorkspace() {
+    document.getElementById(IDS.localeLintPopover)?.remove();
     if (STATE.closing) return;
     STATE.closing = true;
     try {
@@ -3714,8 +3736,229 @@
     };
   }
 
+
+  // ─── Locale lint: the same checker as Retention Future Studio ─────────────
+  // src/shared/locale-lint.js decides; here we only feed it the HTML of every
+  // locale RetKit has seen and paint the verdict on the locale tabs.
+  function localeLintCore() {
+    return root.RetKitLocaleLint || null;
+  }
+
+  function rememberActiveLocaleHtml(html) {
+    const code = currentBridgeLocale();
+    // Only when the editor really shows this locale (not mid-switch).
+    if (!code || !STATE.boundLocale || String(STATE.boundLocale).toUpperCase() !== code) return;
+    if (STATE.multiLocaleBusy || Date.now() < (Number(STATE.localeSwitchUntil) || 0)) return;
+    if (STATE.localeHtmlCache[code] === html) return;
+    STATE.localeHtmlCache[code] = String(html || '');
+    scheduleLocaleLint();
+  }
+
+  function rememberLocaleHtmlMap(htmlByLocale = {}, existing = null) {
+    for (const [locale, html] of Object.entries(htmlByLocale)) STATE.localeHtmlCache[String(locale).toUpperCase()] = String(html || '');
+    if (Array.isArray(existing) && existing.length) {
+      const keep = new Set(existing.map((code) => String(code).toUpperCase()));
+      for (const code of Object.keys(STATE.localeHtmlCache)) if (!keep.has(code)) delete STATE.localeHtmlCache[code];
+    }
+    scheduleLocaleLint(0);
+  }
+
+  function scheduleLocaleLint(delayMs = 500) {
+    clearTimeout(STATE.localeLintTimer);
+    STATE.localeLintTimer = setTimeout(runLocaleLintFromCache, delayMs);
+  }
+
+  function localeLintReference(codes) {
+    return codes.find((code) => /^EN(?:$|[_-])/i.test(code)) || codes.find((code) => /^DEFAULT$/i.test(code)) || '';
+  }
+
+  function runLocaleLintFromCache() {
+    const lint = localeLintCore();
+    if (!lint) return null;
+    const cache = STATE.localeHtmlCache;
+    const codes = Object.keys(cache);
+    const refCode = localeLintReference(codes);
+    if (!refCode || codes.length < 2) {
+      STATE.localeLint = null;
+      STATE.localeLintKey = '';
+      applyLocaleLintMarks();
+      return null;
+    }
+    const key = lint.fingerprint(cache);
+    if (key !== STATE.localeLintKey || !STATE.localeLint) {
+      try {
+        STATE.localeLint = lint.lintHtml({ htmlByLocale: cache, refCode });
+        STATE.localeLintKey = key;
+      } catch (error) {
+        STATE.localeLint = null;
+        diagIncident('locale_lint_failed', error?.message || String(error), { localeCount: codes.length });
+      }
+    }
+    applyLocaleLintMarks();
+    if (document.getElementById(IDS.localeLintPopover)) renderLocaleLintPopover(true);
+    return STATE.localeLint;
+  }
+
+  function localeLintLines(code, limit = 12) {
+    const list = (STATE.localeLint?.issues || []).filter((item) => String(item.locale).toUpperCase() === code);
+    const lines = list.slice(0, limit).map((item) => `${item.severity === 'error' ? '●' : '○'} ${item.code}: ${item.message}${item.sample ? ` «${item.sample}»` : ''}`);
+    if (list.length > limit) lines.push(`… ещё ${list.length - limit}`);
+    return lines;
+  }
+
+  function applyLocaleLintMarks() {
+    const result = STATE.localeLint;
+    const strip = document.getElementById(IDS.localeStrip);
+    for (const tab of strip?.querySelectorAll?.('.rk-v052-locale-tab') || []) {
+      const code = String(tab.dataset.rkLocale || '').toUpperCase();
+      const verdict = code ? result?.locales?.[Object.keys(result.locales).find((key) => key.toUpperCase() === code)] : null;
+      if (!verdict || verdict.status === 'ok') {
+        delete tab.dataset.rkLint;
+        if (tab.dataset.rkLintTitle) { tab.title = tab.dataset.rkLintTitle; delete tab.dataset.rkLintTitle; }
+        continue;
+      }
+      tab.dataset.rkLint = verdict.status;
+      if (!tab.dataset.rkLintTitle) tab.dataset.rkLintTitle = tab.title || '';
+      tab.title = [`${code}: ошибок ${verdict.errors}, предупреждений ${verdict.warnings}`, ...localeLintLines(code, 8)].join('\n');
+    }
+    const button = document.getElementById(IDS.localeLintButton);
+    if (button) {
+      button.classList.remove('rk-lint-error', 'rk-lint-warn', 'rk-lint-ok');
+      if (!result) {
+        button.textContent = '🌐 Locales';
+        button.title = 'Проверка локалей: язык, перевод, пропуски, черновой мусор. Нажмите — проверю все локали.';
+      } else {
+        const errors = result.issues.filter((item) => item.severity === 'error').length;
+        const warnings = result.issues.length - errors;
+        button.classList.add(errors ? 'rk-lint-error' : warnings ? 'rk-lint-warn' : 'rk-lint-ok');
+        button.textContent = errors ? `🌐 Locales ${errors}` : warnings ? `🌐 Locales ${warnings}` : '🌐 Locales ✓';
+        button.title = result.summary;
+      }
+    }
+  }
+
+  async function lintAllLocales({ walk = true } = {}) {
+    const lint = localeLintCore();
+    if (!lint) throw new Error('locale-lint is not loaded');
+    const bridge = multiLocaleBridge();
+    if (walk && bridge?.readLocaleHtmlFast) {
+      for (let i = 0; i < 100 && STATE.multiLocaleBusy; i += 1) await sleep(150);
+      if (STATE.multiLocaleBusy) throw new Error('RetKit is busy with another across-locales action');
+      let locales = [];
+      try { locales = [...new Set((await Promise.resolve(bridge.listLocales?.())) || [])].map(String).filter(Boolean); } catch {}
+      if (!locales.length) locales = knownMultiLocaleCodesFromUi();
+      if (!locales.length) throw new Error('No MoEngage locales are visible');
+      let origin = '';
+      try { origin = String(await Promise.resolve(bridge.getActiveLocale?.() || '')); } catch {}
+      const viewState = captureEditorViewState();
+      const flush = await flushBeforeLocaleSwitch();
+      STATE.localeSwitchUntil = 0;
+      if (!flush.ok) throw new Error(flush.reason);
+      const htmlByLocale = {};
+      setMultiLocaleBusy(true, `Checking locales 0/${locales.length}…`);
+      status(`Checking ${locales.length} locales…`, 'neutral');
+      try {
+        let previous = null;
+        for (let index = 0; index < locales.length; index += 1) {
+          setMultiLocaleLoading(`Checking locales ${index + 1}/${locales.length}…`);
+          const read = await readLocaleForWalk(bridge, locales[index], previous);
+          previous = String(read.html || '');
+          htmlByLocale[locales[index]] = previous;
+        }
+      } finally {
+        if (origin) await restoreMultiLocaleOrigin(origin);
+        await restoreEditorViewStateAfterNativeWork(viewState);
+        setMultiLocaleBusy(false);
+      }
+      for (const [locale, html] of Object.entries(htmlByLocale)) STATE.localeHtmlCache[String(locale).toUpperCase()] = html;
+      const keep = new Set(locales.map((code) => code.toUpperCase()));
+      for (const code of Object.keys(STATE.localeHtmlCache)) if (!keep.has(code)) delete STATE.localeHtmlCache[code];
+    }
+    clearTimeout(STATE.localeLintTimer);
+    const result = runLocaleLintFromCache();
+    if (result) status(`Locales: ${result.summary}`, result.ok ? (result.issues.length ? 'warn' : 'ok') : 'error');
+    else status('Locale check needs the EN (or DEFAULT) locale and at least one more', 'warn');
+    return result;
+  }
+
+  async function aiLintLocales({ walk = true, detail = 'errors', locale = '' } = {}) {
+    const lint = localeLintCore();
+    const before = STATE.localeLintKey;
+    const result = await lintAllLocales({ walk });
+    if (!result) return { ok: false, report: 'Нужны EN (или DEFAULT) и хотя бы ещё одна локаль.' };
+    const unchanged = Boolean(before) && before === STATE.localeLintKey;
+    return {
+      ok: result.ok,
+      unchanged,
+      fingerprint: STATE.localeLintKey,
+      report: unchanged && detail !== 'all' && !locale ? `unchanged · ${result.summary}` : lint.format(result, { detail, locale: locale ? String(locale).toUpperCase() : undefined }),
+    };
+  }
+
+  function renderLocaleLintPopover(forceOpen = false) {
+    const existing = document.getElementById(IDS.localeLintPopover);
+    if (existing && !forceOpen) { existing.remove(); return; }
+    existing?.remove();
+    closeFloatingPopovers(IDS.localeLintPopover);
+    const pop = document.createElement('div');
+    pop.id = IDS.localeLintPopover;
+    pop.className = 'rk-popover';
+    const head = document.createElement('div');
+    head.className = 'rk-popover-head';
+    head.innerHTML = '<strong>Locales</strong>';
+    const run = makeButton('Check all locales', async () => {
+      run.disabled = true;
+      try { await lintAllLocales({ walk: true }); }
+      catch (error) { status(`Locale check failed: ${error?.message || error}`, 'error'); }
+      finally { run.disabled = false; renderLocaleLintPopover(true); }
+    }, { title: 'Пройти по всем локалям MoEngage и проверить каждую' });
+    head.append(run, makeButton('×', () => pop.remove()));
+    pop.appendChild(head);
+    const result = STATE.localeLint;
+    const summary = document.createElement('div');
+    summary.className = 'rk-lint-summary';
+    summary.textContent = result ? result.summary : 'Ещё не проверено: нажмите «Check all locales». Эталон — EN.';
+    pop.appendChild(summary);
+    if (result && !result.issues.length) {
+      const empty = document.createElement('div');
+      empty.className = 'rk-empty';
+      empty.textContent = 'Все локали в порядке: язык, перевод, переменные, без чернового мусора.';
+      pop.appendChild(empty);
+    }
+    for (const item of (result?.issues || []).slice(0, 200)) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'rk-issue-row';
+      const dot = document.createElement('span');
+      dot.className = 'rk-issue-severity';
+      dot.dataset.severity = item.severity === 'error' ? 'error' : 'warning';
+      const text = document.createElement('span');
+      text.textContent = `${item.code}: ${item.message}${item.sample ? ` «${item.sample}»` : ''}`;
+      const where = document.createElement('span');
+      where.className = 'rk-issue-line';
+      where.textContent = String(item.locale);
+      row.append(dot, text, where);
+      row.addEventListener('click', async () => {
+        const target = String(item.locale).toUpperCase();
+        try {
+          if (target !== currentBridgeLocale()) {
+            const flush = await flushBeforeLocaleSwitch();
+            if (flush && flush.ok === false) { status(flush.reason, 'error'); return; }
+            await Promise.resolve(multiLocaleBridge()?.switchLocale?.(target, { preferNative: true, rebind: true }));
+          }
+          const needle = String(item.sample || '').replace(/…$/, '');
+          if (needle) updateSearchHighlights(needle, 0);
+        } catch (error) { status(`Could not open ${target}: ${error?.message || error}`, 'error'); }
+      });
+      pop.appendChild(row);
+    }
+    document.body.appendChild(pop);
+  }
+
   root.__RetKitAiWorkspaceApi = {
     acrossLocales: aiAcrossLocales,
+    lintLocales: aiLintLocales,
+    getLocaleLint: () => (STATE.localeLint ? JSON.parse(JSON.stringify(STATE.localeLint)) : null),
     getCurrentHtml: () => STATE.overlayEditor?.getValue?.() || '',
     setHtml: aiSetHtml,
     getSelectedSource: aiGetSelectedSource,
@@ -3778,7 +4021,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.9 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.0 loaded');
   }
 
   boot();

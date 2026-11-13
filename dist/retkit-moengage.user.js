@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.9.9
+// @version      0.10.0
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1732,6 +1732,7 @@
     shouldTreatNativeMismatchAsLateRevert,
     rebindNativeEditorFromMoEngage,
     flushBeforeLocaleSwitch: (options) => flushBeforeLocaleSwitch(options),
+    applyLocaleLintMarks: () => applyLocaleLintMarks(),
     commitNativeHtml: (html, options = {}) => commitThroughFroala(String(html ?? ''), options),
     isMultiLocaleBusy: () => Boolean(runtimeState?.multiLocaleBusy),
     // Doctor: только чтение, ничего не кликает и не пишет.
@@ -1789,9 +1790,16 @@
     multiLocaleRows: 'retkit-mo-multilocale-rows',
     localeManagerRows: 'retkit-mo-locale-manager-rows',
     localeStrip: 'retkit-mo-locale-strip',
+    localeLintButton: 'retkit-mo-locale-lint-button',
+    localeLintPopover: 'retkit-mo-locale-lint-popover',
   };
 
   const STATE = {
+    // Locale lint (src/shared/locale-lint.js): HTML of locales RetKit has seen, and the verdict.
+    localeHtmlCache: {},
+    localeLint: null,
+    localeLintKey: '',
+    localeLintTimer: null,
     wrap: localStorage.getItem('retkit-mo-wrap') !== 'false',
     previewMode: localStorage.getItem('retkit-mo-preview-mode') || 'desktop',
     splitPercent: Number(localStorage.getItem('retkit-mo-split') || 50),
@@ -2198,6 +2206,13 @@
       .rk-issue-severity[data-severity="error"] { background:#ff737d; }
       .rk-issue-severity[data-severity="warning"] { background:#f4be63; }
       .rk-issue-line { color:#7f91a7; margin-left:auto; white-space:nowrap; }
+      .rk-v052-locale-tab[data-rk-lint="error"] { color:#ff8a92; }
+      .rk-v052-locale-tab[data-rk-lint="error"]::before, .rk-v052-locale-tab[data-rk-lint="warn"]::before { content:""; position:absolute; top:4px; right:2px; width:6px; height:6px; border-radius:50%; background:#ff4d5a; }
+      .rk-v052-locale-tab[data-rk-lint="warn"]::before { background:#f4be63; }
+      #retkit-mo-locale-lint-button.rk-lint-error { color:#ff8a92; }
+      #retkit-mo-locale-lint-button.rk-lint-warn { color:#f4be63; }
+      #retkit-mo-locale-lint-button.rk-lint-ok { color:#72d6a0; }
+      .rk-lint-summary { color:#9fb0c6; font-size:11px; padding:6px 8px; border-bottom:1px solid #202b39; }
     `;
     document.head.appendChild(style);
   }
@@ -2700,6 +2715,7 @@
         const read = await readLocaleForWalk(bridge, locale, previous);
         htmlByLocale[locale] = String(read.html || '');
       }
+      rememberLocaleHtmlMap(htmlByLocale, locales);
       if (String(document.getElementById(IDS.findInput)?.value || '') !== query) {
         // The query changed mid-walk: this result is stale, wait for the button.
         return;
@@ -3191,13 +3207,14 @@
   }
 
   function closeFloatingPopovers(exceptId = '') {
-    for (const id of [IDS.validatorPopover]) {
+    for (const id of [IDS.validatorPopover, IDS.localeLintPopover]) {
       if (id !== exceptId) document.getElementById(id)?.remove();
     }
   }
 
   function updateValidatorStatus() {
     const html = STATE.overlayEditor?.getValue() || '';
+    rememberActiveLocaleHtml(html);
     STATE.validatorIssues = validateEmailHtml(html);
     const button = document.getElementById(IDS.validatorButton);
     const errors = STATE.validatorIssues.filter((issue) => issue.severity === 'error');
@@ -3300,7 +3317,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.9.9</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.0</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3325,12 +3342,16 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.9.9',
+        version: '0.10.0',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
     const diagnosticsButton = document.getElementById('retkit-diagnostics-button');
     bar.insertBefore(validatorBtn, diagnosticsButton || spacer);
+    const lintBtn = makeButton('🌐 Locales', () => renderLocaleLintPopover(false), { title: 'Проверка локалей: язык, перевод, пропуски, черновой мусор' });
+    lintBtn.id = IDS.localeLintButton;
+    bar.insertBefore(lintBtn, diagnosticsButton || spacer);
+    applyLocaleLintMarks();
     try { root.__RetKitAgentRelay?.ensureUi?.(workspace); } catch {}
   }
 
@@ -4349,6 +4370,7 @@
   // left with its empty skeleton (<head><style> + empty <body>) — logs
   // 2026-10-07/08: every "nativeLength 417" rejection followed a Close.
   async function closeWorkspace() {
+    document.getElementById(IDS.localeLintPopover)?.remove();
     if (STATE.closing) return;
     STATE.closing = true;
     try {
@@ -4482,8 +4504,229 @@
     };
   }
 
+
+  // ─── Locale lint: the same checker as Retention Future Studio ─────────────
+  // src/shared/locale-lint.js decides; here we only feed it the HTML of every
+  // locale RetKit has seen and paint the verdict on the locale tabs.
+  function localeLintCore() {
+    return root.RetKitLocaleLint || null;
+  }
+
+  function rememberActiveLocaleHtml(html) {
+    const code = currentBridgeLocale();
+    // Only when the editor really shows this locale (not mid-switch).
+    if (!code || !STATE.boundLocale || String(STATE.boundLocale).toUpperCase() !== code) return;
+    if (STATE.multiLocaleBusy || Date.now() < (Number(STATE.localeSwitchUntil) || 0)) return;
+    if (STATE.localeHtmlCache[code] === html) return;
+    STATE.localeHtmlCache[code] = String(html || '');
+    scheduleLocaleLint();
+  }
+
+  function rememberLocaleHtmlMap(htmlByLocale = {}, existing = null) {
+    for (const [locale, html] of Object.entries(htmlByLocale)) STATE.localeHtmlCache[String(locale).toUpperCase()] = String(html || '');
+    if (Array.isArray(existing) && existing.length) {
+      const keep = new Set(existing.map((code) => String(code).toUpperCase()));
+      for (const code of Object.keys(STATE.localeHtmlCache)) if (!keep.has(code)) delete STATE.localeHtmlCache[code];
+    }
+    scheduleLocaleLint(0);
+  }
+
+  function scheduleLocaleLint(delayMs = 500) {
+    clearTimeout(STATE.localeLintTimer);
+    STATE.localeLintTimer = setTimeout(runLocaleLintFromCache, delayMs);
+  }
+
+  function localeLintReference(codes) {
+    return codes.find((code) => /^EN(?:$|[_-])/i.test(code)) || codes.find((code) => /^DEFAULT$/i.test(code)) || '';
+  }
+
+  function runLocaleLintFromCache() {
+    const lint = localeLintCore();
+    if (!lint) return null;
+    const cache = STATE.localeHtmlCache;
+    const codes = Object.keys(cache);
+    const refCode = localeLintReference(codes);
+    if (!refCode || codes.length < 2) {
+      STATE.localeLint = null;
+      STATE.localeLintKey = '';
+      applyLocaleLintMarks();
+      return null;
+    }
+    const key = lint.fingerprint(cache);
+    if (key !== STATE.localeLintKey || !STATE.localeLint) {
+      try {
+        STATE.localeLint = lint.lintHtml({ htmlByLocale: cache, refCode });
+        STATE.localeLintKey = key;
+      } catch (error) {
+        STATE.localeLint = null;
+        diagIncident('locale_lint_failed', error?.message || String(error), { localeCount: codes.length });
+      }
+    }
+    applyLocaleLintMarks();
+    if (document.getElementById(IDS.localeLintPopover)) renderLocaleLintPopover(true);
+    return STATE.localeLint;
+  }
+
+  function localeLintLines(code, limit = 12) {
+    const list = (STATE.localeLint?.issues || []).filter((item) => String(item.locale).toUpperCase() === code);
+    const lines = list.slice(0, limit).map((item) => `${item.severity === 'error' ? '●' : '○'} ${item.code}: ${item.message}${item.sample ? ` «${item.sample}»` : ''}`);
+    if (list.length > limit) lines.push(`… ещё ${list.length - limit}`);
+    return lines;
+  }
+
+  function applyLocaleLintMarks() {
+    const result = STATE.localeLint;
+    const strip = document.getElementById(IDS.localeStrip);
+    for (const tab of strip?.querySelectorAll?.('.rk-v052-locale-tab') || []) {
+      const code = String(tab.dataset.rkLocale || '').toUpperCase();
+      const verdict = code ? result?.locales?.[Object.keys(result.locales).find((key) => key.toUpperCase() === code)] : null;
+      if (!verdict || verdict.status === 'ok') {
+        delete tab.dataset.rkLint;
+        if (tab.dataset.rkLintTitle) { tab.title = tab.dataset.rkLintTitle; delete tab.dataset.rkLintTitle; }
+        continue;
+      }
+      tab.dataset.rkLint = verdict.status;
+      if (!tab.dataset.rkLintTitle) tab.dataset.rkLintTitle = tab.title || '';
+      tab.title = [`${code}: ошибок ${verdict.errors}, предупреждений ${verdict.warnings}`, ...localeLintLines(code, 8)].join('\n');
+    }
+    const button = document.getElementById(IDS.localeLintButton);
+    if (button) {
+      button.classList.remove('rk-lint-error', 'rk-lint-warn', 'rk-lint-ok');
+      if (!result) {
+        button.textContent = '🌐 Locales';
+        button.title = 'Проверка локалей: язык, перевод, пропуски, черновой мусор. Нажмите — проверю все локали.';
+      } else {
+        const errors = result.issues.filter((item) => item.severity === 'error').length;
+        const warnings = result.issues.length - errors;
+        button.classList.add(errors ? 'rk-lint-error' : warnings ? 'rk-lint-warn' : 'rk-lint-ok');
+        button.textContent = errors ? `🌐 Locales ${errors}` : warnings ? `🌐 Locales ${warnings}` : '🌐 Locales ✓';
+        button.title = result.summary;
+      }
+    }
+  }
+
+  async function lintAllLocales({ walk = true } = {}) {
+    const lint = localeLintCore();
+    if (!lint) throw new Error('locale-lint is not loaded');
+    const bridge = multiLocaleBridge();
+    if (walk && bridge?.readLocaleHtmlFast) {
+      for (let i = 0; i < 100 && STATE.multiLocaleBusy; i += 1) await sleep(150);
+      if (STATE.multiLocaleBusy) throw new Error('RetKit is busy with another across-locales action');
+      let locales = [];
+      try { locales = [...new Set((await Promise.resolve(bridge.listLocales?.())) || [])].map(String).filter(Boolean); } catch {}
+      if (!locales.length) locales = knownMultiLocaleCodesFromUi();
+      if (!locales.length) throw new Error('No MoEngage locales are visible');
+      let origin = '';
+      try { origin = String(await Promise.resolve(bridge.getActiveLocale?.() || '')); } catch {}
+      const viewState = captureEditorViewState();
+      const flush = await flushBeforeLocaleSwitch();
+      STATE.localeSwitchUntil = 0;
+      if (!flush.ok) throw new Error(flush.reason);
+      const htmlByLocale = {};
+      setMultiLocaleBusy(true, `Checking locales 0/${locales.length}…`);
+      status(`Checking ${locales.length} locales…`, 'neutral');
+      try {
+        let previous = null;
+        for (let index = 0; index < locales.length; index += 1) {
+          setMultiLocaleLoading(`Checking locales ${index + 1}/${locales.length}…`);
+          const read = await readLocaleForWalk(bridge, locales[index], previous);
+          previous = String(read.html || '');
+          htmlByLocale[locales[index]] = previous;
+        }
+      } finally {
+        if (origin) await restoreMultiLocaleOrigin(origin);
+        await restoreEditorViewStateAfterNativeWork(viewState);
+        setMultiLocaleBusy(false);
+      }
+      for (const [locale, html] of Object.entries(htmlByLocale)) STATE.localeHtmlCache[String(locale).toUpperCase()] = html;
+      const keep = new Set(locales.map((code) => code.toUpperCase()));
+      for (const code of Object.keys(STATE.localeHtmlCache)) if (!keep.has(code)) delete STATE.localeHtmlCache[code];
+    }
+    clearTimeout(STATE.localeLintTimer);
+    const result = runLocaleLintFromCache();
+    if (result) status(`Locales: ${result.summary}`, result.ok ? (result.issues.length ? 'warn' : 'ok') : 'error');
+    else status('Locale check needs the EN (or DEFAULT) locale and at least one more', 'warn');
+    return result;
+  }
+
+  async function aiLintLocales({ walk = true, detail = 'errors', locale = '' } = {}) {
+    const lint = localeLintCore();
+    const before = STATE.localeLintKey;
+    const result = await lintAllLocales({ walk });
+    if (!result) return { ok: false, report: 'Нужны EN (или DEFAULT) и хотя бы ещё одна локаль.' };
+    const unchanged = Boolean(before) && before === STATE.localeLintKey;
+    return {
+      ok: result.ok,
+      unchanged,
+      fingerprint: STATE.localeLintKey,
+      report: unchanged && detail !== 'all' && !locale ? `unchanged · ${result.summary}` : lint.format(result, { detail, locale: locale ? String(locale).toUpperCase() : undefined }),
+    };
+  }
+
+  function renderLocaleLintPopover(forceOpen = false) {
+    const existing = document.getElementById(IDS.localeLintPopover);
+    if (existing && !forceOpen) { existing.remove(); return; }
+    existing?.remove();
+    closeFloatingPopovers(IDS.localeLintPopover);
+    const pop = document.createElement('div');
+    pop.id = IDS.localeLintPopover;
+    pop.className = 'rk-popover';
+    const head = document.createElement('div');
+    head.className = 'rk-popover-head';
+    head.innerHTML = '<strong>Locales</strong>';
+    const run = makeButton('Check all locales', async () => {
+      run.disabled = true;
+      try { await lintAllLocales({ walk: true }); }
+      catch (error) { status(`Locale check failed: ${error?.message || error}`, 'error'); }
+      finally { run.disabled = false; renderLocaleLintPopover(true); }
+    }, { title: 'Пройти по всем локалям MoEngage и проверить каждую' });
+    head.append(run, makeButton('×', () => pop.remove()));
+    pop.appendChild(head);
+    const result = STATE.localeLint;
+    const summary = document.createElement('div');
+    summary.className = 'rk-lint-summary';
+    summary.textContent = result ? result.summary : 'Ещё не проверено: нажмите «Check all locales». Эталон — EN.';
+    pop.appendChild(summary);
+    if (result && !result.issues.length) {
+      const empty = document.createElement('div');
+      empty.className = 'rk-empty';
+      empty.textContent = 'Все локали в порядке: язык, перевод, переменные, без чернового мусора.';
+      pop.appendChild(empty);
+    }
+    for (const item of (result?.issues || []).slice(0, 200)) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'rk-issue-row';
+      const dot = document.createElement('span');
+      dot.className = 'rk-issue-severity';
+      dot.dataset.severity = item.severity === 'error' ? 'error' : 'warning';
+      const text = document.createElement('span');
+      text.textContent = `${item.code}: ${item.message}${item.sample ? ` «${item.sample}»` : ''}`;
+      const where = document.createElement('span');
+      where.className = 'rk-issue-line';
+      where.textContent = String(item.locale);
+      row.append(dot, text, where);
+      row.addEventListener('click', async () => {
+        const target = String(item.locale).toUpperCase();
+        try {
+          if (target !== currentBridgeLocale()) {
+            const flush = await flushBeforeLocaleSwitch();
+            if (flush && flush.ok === false) { status(flush.reason, 'error'); return; }
+            await Promise.resolve(multiLocaleBridge()?.switchLocale?.(target, { preferNative: true, rebind: true }));
+          }
+          const needle = String(item.sample || '').replace(/…$/, '');
+          if (needle) updateSearchHighlights(needle, 0);
+        } catch (error) { status(`Could not open ${target}: ${error?.message || error}`, 'error'); }
+      });
+      pop.appendChild(row);
+    }
+    document.body.appendChild(pop);
+  }
+
   root.__RetKitAiWorkspaceApi = {
     acrossLocales: aiAcrossLocales,
+    lintLocales: aiLintLocales,
+    getLocaleLint: () => (STATE.localeLint ? JSON.parse(JSON.stringify(STATE.localeLint)) : null),
     getCurrentHtml: () => STATE.overlayEditor?.getValue?.() || '',
     setHtml: aiSetHtml,
     getSelectedSource: aiGetSelectedSource,
@@ -4546,7 +4789,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.9.9 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.0 loaded');
   }
 
   boot();
@@ -4775,6 +5018,551 @@
   root.RetKitReplaceAcross = {
     version: 2, MAX_HITS, fileNameOf, looksLikeImage, variants, scan, countIn, replaceIn, plan, apply, planLocales,
   };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+/*! RetKit locale-lint language models — GENERATED by scripts/vendor-locale-lint-data.mjs, do not edit.
+ *  Trigram models from franc-all 7.2.0 (https://github.com/wooorm/franc),
+ *  MIT License, Copyright (c) 2014 Titus Wormer <tituswormer@gmail.com>.
+ *  The models are built from the Universal Declaration of Human Rights (copyright-free).
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+ *  documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+ *  the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+ *  permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright
+ *  notice and this permission notice shall be included in all copies or substantial portions of the Software.
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+ */
+(function (root) {
+  'use strict';
+  root.RetKitLocaleLintData = {"source":"franc-all 7.2.0","models":{"Latin":{"eng":"the| th| an|he |nd |ion|and| to|to |tio| of|on |of | in|al |ati|or |ght|igh|rig| ri|ne |ent|one|ll |is |as |ver|ed | be|e r|in |t t|all|eve|ht | or|ery|s t|ty | ev|e h|yon| ha|ryo|e a|be |his| fr|ng |d t|has| sh|ing| hi|sha| pr| co| re|hal|nal|y a|s a|n t|ce |men|ree|fre|e s|l b|nat|for|ts |nt |n a|ity|ry |her|nce|ect|d i| pe|pro|n o|cti| fo|e e|ly |es | no|ona|ny |any|er |re |f t|e o| de|s o| wi|ter|nte|e i|ons| en| ar|res|ers|y t|per|d f| a | on|ith|l a|e t|oci|soc|lit| as| se|dom|edo|eed|nti|s e|t o|oth|wit| di|equ|t a|ted|st |y o|int|e p| ma| so| na|l o|e c|ch |d a|enc|th |are|ns |ic | un| fu|tat|ial|cia| ac|hts|nit|qua| eq| al|om |e w|d o|f h|ali|ote|n e| wh|r t|sta|ge |thi|o a|tit|ual|an |te |ess| ch|le |ary|e f|by | by|y i|tec|uni|o t|o o| li|no | la|s r| su|inc|led|rot|con| pu| he|ere|imi|r a|ntr| st| ot|eli|age|dis|s d|tle|itl|hou|son|duc|edu| wo|ate|ble|ces|at | at| fa|com|ive|o s|eme|o e|aw |law|tra|und|pen|nde|unt|oun|n s|s f|f a|tho|ms | is|act|cie|cat|uca| ed|anc|wor|ral|t i| me|o f|ily|pri|ren|ose|s c|en |d n|l c|ful|rar|nta|nst| ag|l p|min|din|sec|y e| tr|rso|ich|hic|whi|cou|ern|uri|r o|tic|iti|igi|lig|rat|rth|t f|oms|rit|d r|ee |e b|era|rou|se |ay |rs | ho|abl|e u","deu":"en |er |der|ein| un|nd |und|ung|cht|ich| de|sch|ng | ge|ine|ech|gen|rec|che|ie | re|eit| au|ht |die| di| ha|ch | da|ver| zu|lic|t d|in |auf| ei| in| be|hen|nde|n d|uf |ede| ve|it |ten|n s|sei|at |jed| je| se|and|rei|s r|den|ter|ne |hat|t a|r h|zu |das|ode| od|as |es | an|fre|nge| we|n u|run| fr|ere|e u|lle|ner|nte|hei|ese| so|rde|wer|ige| al|ers|n g|hte|d d| st|n j|lei|all|n a|nen|ege|ent|bei|g d|erd|t u|ren|nsc|chu| gr|kei|ens|le |ben|aft|haf|cha|tli|ges|e s| si|men| vo|lun|em |r s|ion|te |len|gru|gun|tig|unt|uch|spr|n e|ft |ei |e f| wi| sc|r d|n n|geh|r g|dar|sta|erk| er|r e|sen|eic|gle| gl|lie|e e|tz |fen|n i|nie|f g|t w|des|chl|ite|ihe|eih|ies|ruc|st |ist|n w|h a|n z|e a| ni|ang|rf |arf|gem|ale|ati|on |he |t s|ach| na|end|n o|pru|ans|sse|ern|aat|taa|ehe|e d|hli|hre|int|tio|her|nsp|de |mei| ar|r a|ffe|e b|wie|erf|abe|hab|ndl|n v|sic|t i|han|ema|nat|ber|ied|geg|d s|nun|d f|ind| me|gke|igk|ieß| fa|igu|hul|r v|dig|rch|urc|dur| du|utz|hut|tra|aus|alt|bes|str|ell|ste|ger|r o|esc|e g|rbe|arb|ohn|r b|mit|d g|r w|ntl|sow|n h|nne|etz|raf|dlu| ih|lte|man|iem|erh|eru| is|dem|lan|rt |son|isc|eli|rel|n r|e i|rli|r i| mi|e m|ild|bil| bi|eme| en|ins|für| fü|gel|öff| öf|owi|ill|wil|e v|ric|f e","spa":" de|de |os | la| a |la | y |ón |ión|es |ere|rec|ien|o a|der|ció|cho|ech|en |a p|ent|a l|aci|el |na |ona|e d| co|as |da | to|al |ene| en|tod| pe|e l| el|ho |nte| su|per|a t|ad | ti|ers|tie| se|rso|son|e s| pr|o d|oda|te |cia|n d| es|dad|ida| in|ne |est|ion|cio|s d|con|a e| po|men| li|n e|nci|res|su |to |tra| re| lo|tad| na|los|a s| o |ia |que| pa|rá |pro| un|s y|ual|s e|lib|nac|do |ra |er |a d|ue | qu|e e|sta|nal|ar |nes|ica|a c|ser|or |ter|se |por|cci|io |del|l d|des|ado|les|one|a a|ndi| so| cu|s p|ale|s n|ame|par|ici|oci|una|ber|s t|rta|com| di|dos|e a|imi|o s|e c|ert|las|o p|ant|dic|nto| al|ara|ibe|enc|o e|s l|cas| as|e p|ten|ali|o t|soc|y l|n c|nta|so |tos|y a|ria|n t|die|a u| fu|no |l p|ial|qui|dis|s o|hos|gua|igu| ig| ca|sar|l t| ma|l e|pre| ac|tiv|s a|re |nad|vid|era| tr|ier|cua|n p|ta |cla|ade|bre|s s|esa|ntr|ecc|a i| le|lid|das|d d|ido|ari|ind|ada|nda|fun|mie|ca |tic|eli|y d|nid|e i|odo|ios|o y|esp|iva|y e|mat|bli|r a|drá|tri|cti|tal|rim|ont|erá|us |sus|end|pen|tor|ito|ond|ori|uie|lig|n a|ist|rac|lar|rse|tar|mo |omo|ibr|n l|edi|med| me|nio|a y|eda|isf|lo |aso|l m|ias|ico|lic|ple|ste|act|tec|ote|rot|ele|ura| ni|ie |adi|u p|seg|s i|un |und|a n|lqu|alq|o i|inc|sti| si|n s|ern","fra":" de|es |de |ion|nt |tio|et |ne |on | et|ent|le |oit|e d| la|e p|la |it | à |t d|roi|dro| dr| le|té |e s|ati|te |re | to|s d|men|tou|e l|ns | pe| co|son|que| au| so|e a|onn|out| un| qu| sa| pr|ute|eme| l’|t à| a |e e|con|des| pa|ue |ers|e c| li|a d|per|ont|s e|t l|les|ts |tre|s l|ant| ou|cti|rso|ou |ce |ux |à l|nne|ons|ité|en |un | en|er |une|n d|sa |lle| in|nte|e t| se|lib|res|a l|ire| d’| re|é d|nat|iqu|ur |r l|t a|s s|aux|par|nal|a p|ans|dan|qui|t p| dé|pro|s p|air| ne| fo|ert|s a|nce|au |ui |ect|du |ond|ale|lit| po|san| ch|és | na|us |com|our|ali|tra| ce|al |e o|e n|rté|ber|ibe|tes|r d|e r|its| di|êtr|pou|été|s c|à u|ell|int|fon|oci|soc|ut |ter| da|aut|ien|rai| do|iss|s n| ma|bli|ge |est|s o| du|ona|n p|pri|rs |éga| êt|ous|ens|ar |age|s t| su|cia|u d|cun|rat| es|ir |n c|e m| ét|t ê|a c| ac|ote|n t|ein| tr|a s|ndi|e q|sur|ée |ser|l n| pl|anc|lig|t s|n e|s i|t e| ég|ain|omm|act|ntr|tec|gal|ul | nu| vi|me |nda|ind|soi|st | te|pay|tat|era|il |rel|n a|dis|n s|pré|peu|rit|é e|t é|bre|sen|ill|l’a|d’a| mo|ass|lic|art| pu|abl|nta|t c|rot| on| lo|ure|l’e|ava|ten|nul|ivi|t i|ess|ys |ays| fa|ine|eur|rés|cla|tés|oir|eut|e f|utr|doi|ibr|ais|ins|éra|’en|iét|l e|s é|nté| ré|ssi| as|nse|ces|é a","ita":" di|to | in|ion|la | de|di |re |e d|ne | e |zio|rit|a d|one|o d|ni |le |lla|itt|ess| al|iri|dir|tto|ent|ell|i i|del|ndi|ere|ind|o a| co|te |tà |ti |a s|uo |e e|gni|azi| pr|idu|ivi|duo|vid|div|ogn| og| es|i e| ha|all|ale|nte|e a|men|ser| su| ne|e l|za |i d|per|a p|ha | pe| un|con|no |sse|li |e i| o | so| li| la|pro|ia |o i|e p|o s|i s|in |ato|o h|na |e s|a l|e o|nza|ali|tti|o p|ta |so |ber|ibe|lib|o e|un | a | ri|ua |il | il|nto|pri|el | po|una|are|ame| qu|a c|ro |oni|nel|e n| ad|ual|gli|sua|ond| re|a a|i c|ri |o o|sta|ita|i o| le|ad |i a|ers|enz|ssi|à e|ità|gua|i p|e c|io | pa|ter|soc|nal|ona|naz|ist|cia|rso|ver|a e|i r|tat|lle|sia| si|rio|tra|che| se|rtà|ert|anz|eri|tut|à d|he | da|al |ant|qua|on |ari|o c| st|oci|er |dis|tri|si |ed | ed|ono| tu|ei |dei|uzi|com|att|a n|opr|rop|par|nes|i l|zza|ese|res|ien|son| eg|n c|ont|nti|pos|int|ico|rà |sun|ial|lit|sen|pre|tta|dev|nit|era|eve|ll |l i| l |nda|ina|non| no|o n|ria|str|d a|art|se |ssu|ica|raz|ett|sci|gio|ati|egu| na|i u|utt|ve | ma|do |e r|ssa|sa |a f|n p|fon| ch|d u|rim| fo|a t| sc|trà|otr|pot|n i| cu|l p|ra |ezz|a o|ini|sso|dic|ltr|uni|cie| ra|i n|ruz|tru|ste| is|der|l m|a r|pie|lia|est|dal|nta| at|tal|ntr| pu|nno|ann|ten|vit|a v","nld":"en |an |de | de| he|ing|cht| en|der|van| va|ng |een|et |ech| ge| ee|n e|rec| re|n v|n d|nde|ver| be|er |ede|den| op|het|n i| te|lij|gen|zij| zi|ht |ijk|eli| in|t o| ve|op |and|ten|ke |ijn|e v|jn |ied| on|eft| ie|sch|n z|n o|aan|ft |eid|te |oor| we|ond|eef|ere|hee|id |in |rde|n w|t r|aar|rij|ord|wor|ens|of | of|hei|n g| vr| vo| aa|r h|hte| wo|n h|al |nd |vri|e o|ren|le |or |n a|jke|lle|eni|n b|ij |e e|g v| st|ige|die|e g|men|nge|t h|e b| za|e s|om |t e|ati|wel|erk|sta|ers| al| om|n t|zal|dig| me|ste|voo|ter|gin|re |ege|ge |g e|bes|nat| na|eke|che|ig |gel|nie|nst|e a|nig|est|e w|erw|r d|end|ona|d v|jhe|ijh|d e|ele| di|ie | do|del|n n|at |it | da|tie|e r|elk|ich|jk |vol|ijd|tel|min|len|str|lin|n s|per|t d|han| zo|hap|cha|wet| to|ven| ni|aat|ion|tio|taa|lke|eze|met|ard|waa|uit|sti|e n|doo|pen|eve|el |toe|ale|ien|ach|st |ns | wa|eme|nin|e d|bij| gr|n m|p v|esc|t w|ont|ite|man|ema| ma|nal|g o|rin|hed|t a|t v|beg|all|ijs|wij|rwi|e h| bi|gro|p d|rmi|erm|her|oon| pe|eit|kin|t z|iet|iem|e i|gem|igi| an|d o|r e|ete|e m|js | hu|oep|g z|edi|arb|zen|tin|ron|daa|teg|g t|raf|tra|eri|soo|nsc|t b| er|lan| la|ern|ar |lit|zon|d z|ze |dez|eho|d m|tig|loo|mee|ger|ali|gev|ije|ezi|gez|nli|l v|tij|eer| ar","nob":"er |og | og|en |til| ha| ti| re|ett| de|ing|ret|il |tt |et |lle|for|ar | en|ver|ell|om | fo|ng |har|r h|het|ler|lig| so|hve|t t| el|ter|nne|som|enh|and|de |av |nhv|ska| å | i |le |r r|den|e e| fr|ig |r s|nde|els|se |e o| er|enn| me| st|lse|al |re |fri|tte| sk|han|or | be| in|ke | av| ut|ghe|r e|esk|nge|te |es | på|ete|der|nin|ten|på |igh|ed |l å|kal|ge |unn| sa|ent|e s|eli|n s|rin|ne |g f|itt|sam|lik|gen|t s|end|jon|sjo|asj| an|r o|g s|t o|men| al| si|lin|mme|med|g o|ner|dig|n m|ren|nte|ige|inn|e f| gr|e r|r f| ve|sni|sky|g e|del|ens|und|res|det|isk|gru|ihe|rih|tig|tti|kte|ans|g t|tel| li| un|lan|nas|t i|m e|r u|ske|e m|ns |ekt|str|t e|ers|per|ale|kke| he|rel|run| ar|kap|mot| mo|all|eid|bei|rbe|arb|e t| vi|bes|g r|ven|s f|eri| må|n e|e g| na|nn |e d|kra| kr|ot |ndl|ere|erd|rit|ære|vis|ger|ffe|id |e a|ytt|kyt|g h| et|tes| sl|i s|må | la|dom|l e|n o| fa|rav|r k|t f|nes|vær|ta |sta|ste|å d|ndi|g d|bar|l f|isn|rvi|g a|vil|nnl|r m|t d|jen|dli|e b|gre|e h|ikk|el |l o|nal|ona|opp|r a|on |n a|noe| no|ute|erk|v p|ts |e i|dre|g m|ie |gan|erv|org|ser|tat|ang|at |t v|s o|tli|fen|an |e n|ik |g i|å s|lov| lo|r l|t a|lt |ove|aff|rdi|m s|l l|nse|r t|n h| pe|sli| gj| ik|d d|old|hol|ial|sia|osi|sos","swe":"ar |er |tt |ch |och| oc|ing|ätt|ill|rät|en | ti|til|för|ll | rä|nde| fö|var|et |and| en|ell| ha|om |het|lle|lig|de |nin| de|ng | in| fr|as |ler| el|gen|nva|und|att|env|r h| i |r r|ska|fri| so|har|der| at|ör |ter|all|t t| ut|den|ka |lla|som|av |sam|ghe|ga | sk| vi| av|ete|la |ens|t a| si|r s|iga|igh|tig| va|ig |a s| st|ion|ra |tti|a o| är|ten|ns |t e|na | be|han| un| an| sa|a f| la| gr| må|nge|n s|vis|lan|må |ati|nat| åt|an |nna| li| al|t f|ans|nsk|sni|gru|äll|tio|ad | me|isk|kli|s f|t i|stä|t s|ri |med|sta|h r|lik|da |dig|ta |r o|run|on | re|lag|tta|är |kap|a i|a r|änd|erv|n e|kte|n f|rvi|nom|itt|id | mo|sky|r e|ver|äns|vil|gt |igt| na|tan|uta|dra|t o|ro |isn| fa|kal|ihe|rih|erk|r u|e s|per|l v|vid|one|rel|ber|ran|ot |mot|ndl|d f|ed |ika|män|l s|bet|t b|dd |ydd|kyd|n o|s s|str|n m|tet|sin|r f| om|rna|int|r i|end|nad|l a|ap |ers|nda|t v|ent|rbe|arb| hä|ets|häl|amh|ckl|gar|nga|r m|je |rje|arj|n i|s e|lin|r t|i s|rän| pe|ilk|t l|ern|på | på|täl|d e|dom|ege|g e|tni|r a|lit|ras| så|lln|kil|ski|enn|i o|a d|erä|n a|ara| ge|äro|a m| ar|t d|ilj|els|yck| ve|g o|frå|nas|tra|ess|del|m s|liv|l l|in |v s|g a|ast|e e|val|son|rso|e t|age|nd | eg|ial|cia|oci|soc|upp|igi|eli|g s|rkl|gad|ndr|nte|öra","tur":" ve| ha|ve |ir |ler|hak| he|her|in |lar|r h|bir|ya |er |ak |kkı|akk|eti| ka| bi|eya|an |eri|iye|yet|ara|ek | ol|de |vey|ın |ır |nda|arı|esi|ını|dır| ta|tle|e h|ası|etl|e k| va|ı v|sın|ile|ne |rke|erk|ard|ine| sa|ınd|ini|k h|kın|ama|le |tin|rdı|var|a v| me|e m|na |sin|ere|k v| şa| bu|lan|kes|dir|rin|dan| ma|kı |mak|şah|da | te|mek| ge|nı | hi|nin|en |n h| se|lik|rle|ana|lma|e a|ı h|r ş|ill|si | de|aya|zdi|izd|aiz|hai|ret|hiç|ına| iş|e b| ba|kla|et | hü|rın|n k|ola|nma|e t| ya|eme|riy|n v|e i|a h|li |mil|eli|ket|ik |kar|irl|hür|im |evl|mes|e d|ahs|ma |rak|ala|let|lle|un | ed|rri|ürr|bu | mi|i v|dil| il| eş|n i|la |el |mal| mü| ko|e g|se | ki|mas|lek|mle|mem|n b|ili|e e|ser| iç|n s|din| di|es |mel|eke|tir|şit|eşi|r b|akl|yla|n m|len| ke|edi|oru|nde|re |ele|ni |tür|a k|eye|ık |ken|uğu| uy|eml|erd|ede|ame| gö|e s|i m|tim|i b|rde|rşı|arş|a s|it |t v|siy|ar |rme|est|bes|rbe|erb|te |alı| an|ndi|end|hsı|unm|rı |kor|nın| ce|maz|mse|ims|kim|iç | ay|a m|lam|ri |sız|a b|ade|n t|nam|lme|ilm|k g|il |tme|etm|r v|e v|n e|ğre|öğr| öğ|al |ıyl|olm|vle|şma|i s|ger|me | da|ind|lem|i o|may|cak|çin|içi|nun|kan|ye |e y|r t|az |ç k|ece|sı |eni| mu|ulu|und|den|lun| fa|şı |ahi|l v|r a|san|kat| so|enm| ev|iş ","ind":"an |ang|ng | da|ak | pe|ata| se| ke| me|dan| di| be|ber|kan|ran|hak|per|yan| ya|nga|nya|gan| at|ara| ha|eng|asa|ora|men|n p|n k|erh|rha|n d|ya |ap |at |as |tan|n b|ala|a d| or|a s|san|tas|eti|uk |pen|g b|set|ntu|n y|tia|iap|k m|eba|aan| un|n s|tuk|k a|p o|am |lam| ma|unt| de|ter|bas|beb|dak|end|i d|pun|mem|tau|dal|ama|keb|aka|ika|n m| ba|di |ma | sa|den|au |nda|n h|eri| ti|ela|k d|un |n a|ebe|ana|ah |ra |ida|uka| te|al |ada|ri |ole|tid|ngg|lak|leh|dap|a p|dil|g d|ena|eh |gar|na |ert|apa|um |tu |atu|a m|sam|ila|har|n t|asi|ban|erl|t d|bat|uat|ta |lan|adi|h d|neg| ne|kum|mas|nan|pat|aha| in|l d|emp|sem|rus|sua|ser|uan|era|ari|erb|kat|man|a b|g s|rta|ai |nny|n u|ung|ndi|han|uku|huk| hu|sa |ers|in | la|ka | su|ann|car|kes|aku|dip|i s|a a|erk|n i|lai|rga|aru|k h|i m|rka|a u|us |nak|emb|gga|nta|iba| pu|ind|s p|ent|mel|ina|min|ian|dar|ni |rma|lua|rik|ndu|lin|sia|rbu|g p|k s|da |aya|ese|u d|ega|nas|ar |ipe|yar|sya|ik |aga| ta|ain|ua |arg|uar|iny|pem|ut |si |dun|eor|seo|rak|ngs|ami|kel|ini|g t|dik|mer|emu|aks|rat|uru|ewa|il |enu|any|kep|pel|asu|rli|ia |dir|jam|mba|mat|pan|g m|ses|sar|das|kuk|bol|ili|u k|gsa|u p|a k|ern|ant|raa|t p|ema|mua|idi|did|t s|i k|rin|erm|esu|ger|elu|nja|enj|ga |dit","zlm":"an |ang| ke|ng | se| da|ada|ara|dan| pe|ran| be|ak |ber|hak|ata|ala|a s|ah |nya| me|da |per|n s|ya | di|kan|lah|n k|aan|gan|dal|pad|kep|a p|n d|erh|eba|nga|yan|rha| ya|nda|ora|tia|asa| ha|ama|epa| or|iap|ap |a b| at| ma|eti|ra |tau|n a|set|au | ba|pa | ad|n p|tan|p o|eng|a d|men|apa|h b|h d|dak|man|a a|ter| te|k k| sa|n b|ana|g a|end|leh|ole|a k|am |n y|aka|eh |lam|bas|beb|n m| un|pen|sa |keb|sam|n t| ti|ela|san|car|uan|ma |di |han|ega|ban|eri|at |sia|a m|ika|kes|ian|gar|seb|ta |mas|und|neg|nan|ngs|i d|erl|na |epe|emb|bar| la|atu|kla|pem|mem|emu|eca|sec|ngg|nny|any|bol|al |aha|gsa|ebe|ind|akl|n h|erk|ung|ena| bo|a t| ap|ers| de|in |tu |pun|as |agi|ann|g b|bag| ne|ain|hen| he|era|rat|sem| su|adi|lan|g s|dia|mat|ses|iad| ta|iha|g t|tin|k m|k h|i k|gi |i s|ing|uka|enu|den|lai|k d|ert|ti |rka|aja|rga|lua|ker|mel|dun|ndu|lin|rli|nak|ntu|esi|aya|un |uat|jua| in|rma|erm|ai |emp|kem|ri |dil|ua |uk |h m|l d|g m|mba|kat|ese|tik|ni |ini| an|mpu|ka |dar|mar|rja|erj|arg|u k|sua| ol|esa|dap|ar |g u|si |ent|g d| pu|awa|iri|dir|sal|gam|mbe|n i|har|a h|raa|ema|tar|i a|saa|ira|ari|pel|jar|laj|uju|tuj|rak|ura|uar|elu|t d|unt|il |wen|asi|gga|ipa|ksa|tuk|ula|sek|sas|ibu|rta|sep|rsa|nta|ati|ila|mua|yar","tgl":"ng |ang| pa|an |sa | ka| sa|at | ma| ng|apa|ala|ata|g p|pan|pag|ay | an| na|ara| at|tan|a p|pat|n a| ba|ga |awa|rap|kar|g k|aya|lan|g m|n n|g b|nga|mga| mg|a k|na |ama|n s|a a|gan|yan|gka| ta|may|tao|agk|asa|man|aka|ao |y m|ana|g a|nan|aha|kan|y k|baw|kal|a m|g n|ing|wat| y |t t|pam|a n|o y|ban| la|ali|san|wal|mag| o |g i|aga|lay|any|g s|in |nya|yon|kas|a s|isa|una|ong|aan|kat|t p| wa|ina|tay|ya |on |o m|ila|ag |nta|t n|aba|ili| ay|o a| ga|no |a i|gal|ant|han|t s|kap|kak|lah|ari|agt|agp|ran|g l|lin|as |lal|gaw|ans|to |ito| it|hay|wa |t m| is|pap|mam|nsa|ahi|nag|bat|lip|gta| di|gay|gpa|pin| si|ngk|ung|aki|y n|iti|tat|ano|yaa|y s|mal|hat|kai|sal|hin|uma|mak|di |agi|pun|ihi|a l|i a|ira|gga|nah|s n|ap | ha|usa|nin|o p|gin|ipu|ika|ngi|i n|lag|la |y p|ini|g t|uka|nap| tu|a g|tas|aru|ipa| ip|li |al |n o|a o|t k|alo| pi|sin|syo|asy|ita|aho|nar|par|o s|pak|t a|uha|sas|gsa|ags|kin|a h|iba|lit|ula|o n|nak|a t| bu|duk|kab|sam|g e|ain|ami|mas|lab|ani|kil|it | al|agb|buh|a b|g g|ba | ib|iyo|ri |yag|ad | da|edu| ed|anl|ma |ais|iga|mba|tun|ipi| ki|od |ayu| li|lih|sar|gi |g w|pah|wir|oob|loo|agg|nli|bay|map|git|mil|ok |hon|ngg|sah|iya|pas|g h|agl|tar|ngu|amb|uku|ayo|s a|p n|n m|rus|i m|l a|abu| aa","vie":"ng |̣c |́c | qu|à | th|nh | ng|̣i |̀n |và| va| nh|uyê| ph|quy| ca|ền|yề|̀nh|̀i |̣t | ch|ó | tr|ngư|i n| gi|gươ|ời|ườ|́t | co|ượ| cu|ác|ự |ợc| kh| đư|đươ| tư|có| ha|ông|c t| đê|n t|i đ|ìn|̀u |cá|gia|́i |ọi|mọ| mo|ều|iệ|đề|u c|như|pha| ba| bi|ất|̉a |ủa|củ|hôn| đô|g t|́ q|̃ng| ti|tự|t c|̣n | la|n đ|n c|n n|hiê|ch |ay |hay| vi|ân | đi| na|bả| ho|do | do| tô| hi|ội|há|ị |nà|̀ t|ới|hân| mô|́p |àn|̣ d|́ch|̣p |̀o |ào|khô|́n |ột|mộ| hô|ia |ốc|c h|hữ|i v|g n|́ng|uố|quô|h t|ôn |ên |n v|nhâ|̣ t| bâ|i c|g v|̉ng|iế|c c|ật|thư|hư |ướ|̉n | vơ| cô|c đ| đo| sư|t t|ộc|ữn|vớ| vê|ả |̣ng|g đ|̉o |ảo|uậ| đa|bị|là|sự|bấ|hà|hộ|i t|ản|hươ|̀ng|tro|̉m |o v| mi|ể |ục|i h|ức|áp|g c|̃ h|iá|n b|̉i |a m|h c|côn|ện|ớc|hạ|độ| du| cư|a c|n h|tha|ã | xa|́o |áo|ín|̀y |g b| hư|g h|ong|ron|̀ c|cho|̀ n|mì|ực|h v|c b| lu|i b|ệ |ai |ế |̣ c|xã|kha|c q|iể|tộ|ối|đố|á |hoa|o h|h đ|cả|n l|họ|tiê|y t|̉ c|ại|án|̀ đ|oà|y đ|chi|̉ n|phâ|ề |thu|iên|dụ|o c|i m|luâ|c p|ốn|c l|́ c|ũn|cũ|c g|c n|qua|n g|c m|o n|ải|hả|́ t|ho |về| tâ| hơ|o t|ở |hứ|hì|viê|̀m |̉ t|đó|thô|ứ |cứ|hí|́nh|ày|ởn|ưở| bă|tri| ta|m v|c v|ợp|hợ|h m| nư|ết|thi|ặc|ngh|uy ","azj":" və|və |ər |ir | hə| bi| hü| ol|üqu|hüq|quq|na |in |lar|hər|də | şə|bir|lər|lik|mal|r b|lma|r h| tə|əxs|şəx|ən |dir|uqu|una|an |ali|a m| ma|ikd|ini|r ş|dən|ar |ilə|qun|aq |ası| ya|mək|yət| mə| mü|kdi|əsi|ək |ilm|nin|ndə|olm|əti|ə y|sin|xs |nda|lmə|yyə|i v| qa| az|olu|iyy|ya |ind|zad|qla|ün |ni |lə |tin|n m|aza|arı|ət |n t|maq|lun|lıq|ə b|un |nun|q v|n h|dan|ın | et|tmə|ərə| öz|da |ə v| on|ə a|ına|ını|bil|a b|sı |il |əmi|ara|si | di|ə m|əri|rlə| va|ə h|etm|ığı|ama|dlı|adl|rin|bər|rın|n i|müd|nın| he|mas|ik |n a|dil|alı|irl|ələ|üda|sın|ınd|xsi|li |ə d|nə | bə|əya| in|ə i|lət| sə|nı | iş|anı|eç |heç|q h|eyn|ə e|dır| da|asi|rı |iş |ifa|lığ|i s|fiə|afi|daf| ed|məz|u v|kil| ha|ola|n v|əni|ır |uq |unm| bu| as|sia|osi|sos|ili|ıdı|lıd|nma|ıq |inə|əra|sil|xil|axi|dax|adə|man|a h|ə o|onu|a q|əz | ki|seç| se|ı h|min|lan|ədə|bu |raq|lı |ılı|al |ə q|r v|nla|hsi|əhs|təh|öz |ist| is|məs| əs|ina|ə t|ətl|a v|iə |n b|tər| ta| cə|edi|ala|kim|qu |i t|ulm|məh|n o|aya|ı o|ial| so|ill|siy| də|var|ins|mi |ğı |nik|r i|aql|k h|təm|tam|çün|üçü| üç|ğın|sas|əsa|z h|əmə|zam| za|sti|rəf|n e|r a|ild|həm|ıql|yan|may|n ə|mən|mil| mi|əqi|din|n d|tün| dö|miy|kah|ika| ni|fad|tif|l o|sər|yni| ey|ana|lən|am |ril|ayə|aşı","por":"de | de| se|ão |os |to |em | e |do |o d| di|er |ito|eit|ser|ent|ção| a |dir|ire|rei|o s|ade|dad|uma|as |no |e d| to|nte| co|o t|tod| ou|men|que|s e|man| pr| in| qu|es | te|hum|odo|e a|da | hu|ano|te |al |tem|o e|s d|ida|m d| pe| re|o a|ou |r h|e s|cia|a e| li|o p| es|res| do| da| à |ual| em| su|açã|dos|a p|tra|est|ia |con|pro|ar |e p|is | na|rá |qua|a d| pa|com|ais|o c|ame|erá| po|uer|sta|ber|ter| o |ess|ra |e e|das|o à|nto|nal|o o|a c|ido|rda|erd| as|nci|sua|ona|des|ibe|lib|e t|ado|s n|ua |s t|ue | so|ica|ma |lqu|alq|tos|m s|a l|per|ada|oci|soc|cio|a n|par|aci|s a|pre|ont|m o|ura|a s| um|ion|e o|or |e r|pel|nta|ntr|a i|io |nac|ênc|str|ali|ria|nst| tr|a q|int|o n|a o|ca |ela|uçã|lid|e l| at|sen|ese|r d|s p|egu|seg|vid|pri|sso|ém |ime|tic|dis|raç|eci|ara| ca|nid|tru|ões|ass|seu|por|a a|m p| ex|so |r i|eçã|teç|ote|rot| le| ma|ing|a t|ran|era|rio|l d|eli|ça |sti| ne|cid|ern|utr|out|r e|e c|tad|gua|igu| ig| os|s o|ruç|ins|çõe|ios| fa|e n|sse| no|re |art|r p|rar|u p|inc|lei|cas|ico|uém|gué|ngu|nin| ni|gur|la |pen|nça|na |içã|ião|cie|ist|sem|ta |ele|e f|om |tro| ao|rel|m a|s s|tar|eda|ied|uni|e m|s i|a f|ias| cu| ac|r a|á a|rem|ei |omo|rec|for|s f|esc|ant|à s| vi|o q|ver|a u|nda|und|fun"},"Cyrillic":{"rus":" пр| и |рав| на|пра|ств|го |ени|во |ове| ка|на |ть | по|ия |о н| об|ет | в |сво| св|аво|ани|ост|ого|ый |ажд|лов|т п| им|ния| че| со|ело|име| не|льн|ли |чел|каж|ест|век|ать|ова|или| ра|ек |й ч|дый|жды| до|ие |еет|мее|но | ил|ии |ся |его|обо|и п|ние|к и| бы|и с|и и|ми |бод|воб|ван| за|ой |ых |ом |лен|аци|енн|о с|о п|ьно|тва|тво|при|ног|аль|ако|ва |и н|сти|ных|то |бра|олж|дол|сто|и в|ным|ое | ег|нов|их |ель|тел|ти |нос|не |пол|раз| вс|и о| ли|и р|ыть|быт|вле|ред|ию |тор| ос|ься|тьс|оди|щес|я и|как|про|жен|ым |пре|а с|сно|е д|нно|о и|ий | ко|о в| ни| де|сту|лжн|сов|е в|ном|оль|ран|оже|иче|ей |аст|нны| от|туп|м и|одн|зов|рес| мо|осу|ля |осн|а о|вен| то|о б|шен|тве|общ|а и|е м|ьны|обр|вер|чен|я н|жно|чес|ак |лич|нии|е и|все|бще|ват|есп|мож|й и|ное|о д|бес| во|я в|ду | ст|дно|она|нац|ден|ежд|х и| бе|и д|ны |дос|для| дл| та|льс|ате|ции|я п|ую |ите|е о|ной|под|ото|стр|ста| ме|ели| ре|я к|тоя|ами|ен |ь в|ю и|азо|гос|м п|ь п|т б|жет|уча|суд|ьст|дст|щит|ащи|защ|кон|нию|ам |оду|ере|гра|печ|о о|оро|кот|и к|тра|ник|уще|циа|оци|соц|нал|еск|о р|ког|дру| др|ни |ава|нст|ем |авн|ыми|едс|дин|дов| го| вы|в к|ые |обе|му |я е|слу|уда|так|кой|ту |иту|зак|ход|вол|раб|кто|икт|ичн|нич|от |ина| к |тер|род|нар","ukr":"на | пр|пра| і |рав| на| по|ня |ння| за|ого|ти |во |го | ко|аво| ма|люд|о н| не| лю|юди|ожн|кож|льн|жна|дин|ати|ає |их |ина|пов|сво| св|анн|є п|має|або|а л| бу|не |енн|бо | аб|а м|ови|ні | ви| ос|аці|вин| та|без|обо| ві| як|ере| до|і п|ува|о п|аль|них|ом |ми |іль|ног|та |ий |при|ою |ть |ста| об|ван|инн|ті |ост| у |ся |ват|бут|ист| мо|езп|ути|нов|пер|ії |и п|бод|воб|ств| в |о в|від| бе|ако|під|тис|кон|но |ва |нні|і с|а п|сті| сп|ний|ду |ьно|она| ін|дно|ним|ій |а з|ну |мож|її | її|ля |соб|му |ої |яко| пе| ра|ід | де|і в|и і|чин|вно|ому|ном|у п|і н|а с| су|а о|нен|ися|ово|нан|одн|у в|і д|ава|ідн|рів| рі|і р|ими|віл|им |ції|о д|а в|сту|оду|буд|ова| пі| ні|я н|е п|нац|и с|нна| од| ро|нос|ьни|ють|и з|ки |і з|а б|спр|чен|же |оже|е м|овн|рим|е б|то |ніх|осо|удь|ві | ре| ст|рац|до | со|роз|лен|вни|івн|род| вс|спі|ков|зпе|ів |для| дл|ї о|хис|ахи|зах|‐як|ь‐я|дь‐|я і|так|зна|заб|сть|ту |ною|а н|тор|сно|о с|жен|ціа|оці|соц|інш|і м|кла|и в|тер| ді|іст|ові|у с|я в|аро|сі |віт|сві|осв|роб|піл|рес|за |печ|абе|ку |лив|ерж|дер|в і|авн|тав|ав |ами|ком|вле|о б|ь п| що|їх |тво|хто|іхт|ког| кр|ано|тан|іал|нал|нь |х п|жно|леж|але|про|тва|рат|о о|х в|нар|льс|цій|кор|час|ржа|ї с|ину|дст|о з|раз|мін|а р|зак"},"Arabic":{"arb":" ال|ية |في | في|الح| أو|أو | وا|وال|حق |ة ا|لحق|الت|كل |الم|لكل| لك|لى |ق ف|ته |و ا|ة و|شخص|ة ل|ات |الأ|ي أ|ون | شخ|م ا|أي | أي|ان |أن |مة |ي ا|الا|لا |ها |اء | أن| عل|خص |ن ا| لل|د ا|من |فرد|ما |الع|ت ا|حري|على|ل ف|رد |ل ش| لا|رية| إل|ة أ|ا ا|ن ي| ول|ا ل|ا ي| فر| من|ة م|الق|جتم|ن أ|ق ا|الإ| حر|له |ه ل|اية|لك |ه ا| دو|دة |اً |ين |ه و|لة |ي ح| عن|ماع|ي ت|ذا | حق|قوق|حقو|، و|ن ت|مع |ص ا|ام |د أ| كا|هذا|الو| إن|مل |امة|ع ا|إلى|ة ع|ماي|حما|ن و|لتع| وي|ير |نون|ي و|اسي|الج| هذ|نسا|وق |ترا|عية|ه أ| له|سية| يج| با|دول|انو|قان|لقا|ة ب|ة ت|تما|الد|يات|ع ب|سان|إنس|هم |علي| مت|لمج|ذلك|عمل|لأس|وز |جوز|يجو|بال|غير|ك ا|كان|ساس|أسا|دم |لاد|اعي|الر|تمي|دون|تمت|لتم| يع|ليه|ساو|اجت|ي م|لعا|لجم|تعل|ر و|تمع|مجت| مع|يه |ى أ|فيه|ى ا| كل|لات|ملا|ود |انت|الف|يها|ي إ|تي |الب|لي |قدم|ال |اد |ل ا|يز |ييز|ميي| تم|لحر|تع |متع|ا ب|عام|ا و|ق و|رام|ل ل|لاج|را |الش| وإ|يم |ليم|شتر|ا ح|واج|لزو|ول |ا ف|ولة|لحم|أسر| ذل|ه ف|اته|مسا|لمس| تع|عن |ه ع|وله|يته|ن ل|رة | وس|اة |يد | تح| مس|ي ي|لتي|عة |ولي|لدو| أس| وف|ل و|أية|ني |الس|لان|لإع|ة ف|ريا|ل إ|م ب|امل|كرا|تسا|ميع|جمي| جم|أول|بية|عيش|تحق|ادة|س ا| مم|معي|جما|عات|اعا|ارس|مار|مما|م و|راك|اشت|الط|اج |زوا|الز| وم|حدة|تحد|لمت|مم |لأم|ده |بلا| بل|ار |يار|تيا|ختي|اخت|ن م| مر","urd":"ور | او|اور|کے | کے| کی| کا|یں | حق|کی |کا | کو|ئے |ے ک|یا |سے |کو |شخص| شخ|نے | اس| ہے|میں|حق | ہو| می|خص |ے ا| جا|اس | سے| یا|ہر |ی ا| کر| ہر|ے۔ |سی |ہیں|ا ح|ص ک|وں |ے م| ان|ر ش|۔ ہ|ائے|زاد|آزا| آز|ام |ر ا|ق ہ|ادی|جائ|ں ک|ہے۔|م ک| کس|ا ج|ی ک|س ک|کسی| پر|ے گ|ہے |ار |ت ک|دی |پر |و ا| حا| جو| ہی|ان |ی ج|ری | نہ| مع|جو |ل ک|ی ت|ن ک|کرن|ئی |ل ہ|تی |ہو |ہ ا| ای|صل |اصل|حاص|رنے|ی ش|نہ |۔ ا|ں۔ |یں۔|ر ک|ر م| مل|وہ |معا|رے |ں ا|نہی|ے ہ|ے ب|ایس|ے ل| تع| گا|یت |ی ح|ا ا|ی م|اپن| اپ|کیا|می |ی س| جس|ہ ک|نی |اشر|عاش| دو|لئے| لئ|انہ|وق |قوق|حقو|مل | قا|کہ | گی|ر ب|ہ م| وہ| بن|ی ب|ملک|جس |ا۔ |ریق|ر ن|ے ج|اد |ات |گی |د ک|ے ح|دار|ر ہ|گا۔|قوم| قو|ے، |ا س|دوس|ر پ| و | شا|ی آ|ں م|ق ح| پو| با|خلا|انے|یم |لیم|و ت|ون | کہ|ی، |۔ ک|ا پ|ن ا|لک |علا|ا م|ق ک|ائی|وسر|ی ہ|وئی|یر |ا ہ|علی|و گ|وری|دگی|ندگ|و ک|یسے| من|ائد|رائ| مر|پور| طر|ومی|ے خ|سب |نون|انو|قان| سک|وام|ین | رک|تعل|لاق|غیر|دان|، ا| بی| مس|یوں|نا | بھ| بر|رتی|ادا|امل|یہ | یہ|ہ و| عا|ی پ| بچ|اف |لاف| خل|ی۔ |گی۔| دی|ھی |بھی|دہ |جا |پنی|قوا|اقو|رکھ|ے ی| عل|کوئ|، م| چا|ے س|ر ع| پی|برا|ر س|ر ح|سان|م ا|کام|شرت| را|شام|من |زند| زن|ب ک|ت م|اہ |اری|س م|ر ج| مح|ورا|ے پ|طری|ہوں|ال |ں س|ی ن|کرے| مق|ت س|تحف| تح|و۔ |ہو۔|بند| اق|د ہ| ام|امی|الا|لت |شرے|ے ع|ا ک|فری"},"Devanagari":{"hin":"के |प्र| प्| का| के| । |और | और|का | को|कार|ार |ति |या |को |ने |ों |िका|्रत| है| कि|ं क|है |धिक|व्य|अधि| अध|्ति| सम|्यक|ि क|क्त|ा अ|की |ा क| व्|ें | हो|यक्|सी |से |े क| या| की|में|न्त| मे|त्य|ै ।|ता |रत्|क्ष|ेक |येक|्ये|िक |र ह|भी |किस| जा| स्|क व|ा ज|िसी|मान| वि|र स|त्र|ी स|। प| कर|्रा|गा |ित | अप| पर|स्व|ी क| से|ा स|्य | अन|्त्|िया|ा ह| सा|ना |्त |प्त|समा|ान |र क|ाप्|तन्| भी| उस|राप|वतन|्वत|रों|वार|े स|था |हो |े अ|ा ।|न क| न |देश| रा|षा |अन्|त ह|्षा|्वा|जाए|ी प|करन|ा प|अपन|ष्ट| सं|े व|होग|िवा|ट्र|्ट्|ाष्|राष|सके| मा|ओं |ाओं|री |क स|े प| नि|ीय |रक्|ो स|ाएग|रने| इस|व क|पर |रता|र अ| सभ|तथा| तथ| ऐस|रा |पने|्री|िक्|किय|ा व|माज|ं औ|र उ|द्ध|सभी|श्य| जि|ाने|ार्|ारा|द्व| द्|एगा|सम्|ेश |िए |ाव |र प| दे|्तर|ा औ|ारो|यों|परा|पूर|चित|्ध |रूप| रू| सु| लि|त क|ो प|ं स|े ल|शिक| शि|वाह|े औ|जो |राध|जिस|ूर्|ी भ|ूप |ोगा|स्थ|रीय|तिक|्र |। इ|इस | उन|ले |े म|लिए|म क|कता|े य| जो|न म|अपर| पू|ो क|ा उ|ाह |नून|ानू|गी |दी |ारी|ं म|। क|तर्|ी र|श क|परि|स्त|ोई |कोई|र्य|ी अ|हित|भाव| भा|ताओ|ास |साम|विक|विव|म्म| सक|कर |ाना|ध क|निक|य क|उसक|कृत| क़ा|न स|जीव|्या|रका|्रक|ाज |न्य|्म |र्ण|क़ ह|हक़ | हक़|ी म|जिक|ाजि|ामा|क औ|मिल|ेने|लेन| ले|ये |ो अ|े ज|रिव|मय |समय|वश्|आवश| आव|ऐसी|ाध |र द|र्व|सार|प स|बन्| सह|िधा|विध|ी न|ून |क़ान"}}};
+  if (typeof module !== 'undefined' && module.exports) module.exports = root.RetKitLocaleLintData;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+/*! RetKit locale-lint — one locale checker for every RetKit tool
+ *  (RetKit for MoEngage, Retention Future Studio, agent tools over MCP).
+ *  Pure logic, no DOM, no network, no keys. Source of truth:
+ *  retkit-moeng/src/shared/locale-lint.js (Studio keeps a byte-identical copy).
+ *
+ *  What it catches in every locale, against the reference locale (en):
+ *   error  empty          — block is blank while the reference has text
+ *   error  missing_block  — locale has fewer/more blocks than the reference
+ *   error  var_mismatch   — {{variables}} differ from the reference
+ *   error  markup         — @@bold@@ markers broken or differ from the reference
+ *   error  placeholder    — raw draft junk: lorem ipsum, TODO, TBD, XXX, ???, [text], "title here"…
+ *   error  mojibake       — broken encoding: Ã©, â€™, �
+ *   error  untranslated   — text is the reference text, letter for letter
+ *   error  wrong_script   — letters are not of the locale's alphabet (ar, ru, th, ja…)
+ *   error  wrong_lang     — whole locale is written in another language
+ *   warn   wrong_lang     — a close language (es/pt, id/ms, no/sv, ru/uk, ar/ur) or one long block
+ *   warn   length         — translation is several times longer/shorter than the reference
+ *
+ *  Language detection: the trigram method of franc (MIT © Titus Wormer) with
+ *  its models trimmed to RetKit locales (locale-lint-data.js). Short strings
+ *  carry no language signal, so language is judged on long blocks and on the
+ *  whole locale; alphabets are judged on any block with enough letters.
+ *
+ *  API (root.RetKitLocaleLint):
+ *   lint({ locales: {code: string[]}, refCode?, mode?: 'txt'|'html', keep?: string[] }) → result
+ *   lintHtml({ htmlByLocale: {code: html}, refCode?, keep? }) → result   (MoEngage: one HTML per locale)
+ *   textsFromHtml(html) → string[]
+ *   format(result, { detail?: 'summary'|'errors'|'all', locale?, limit? }) → compact text for agents
+ *   langOf(code) → { code, base, lang, script } | null
+ *   detect(text, candidates?) → [[lang, score], …]
+ *   fingerprint(locales) → string
+ */
+(function (root) {
+  'use strict';
+
+  const VERSION = '1.0.0';
+
+  // locale base code → franc language (null: alphabet alone identifies it) + alphabet
+  const LANGS = {
+    en: ['eng', 'Latin'], de: ['deu', 'Latin'], es: ['spa', 'Latin'], fr: ['fra', 'Latin'],
+    it: ['ita', 'Latin'], nl: ['nld', 'Latin'], no: ['nob', 'Latin'], nb: ['nob', 'Latin'],
+    se: ['swe', 'Latin'], sv: ['swe', 'Latin'], tr: ['tur', 'Latin'], id: ['ind', 'Latin'],
+    ms: ['zlm', 'Latin'], tl: ['tgl', 'Latin'], fil: ['tgl', 'Latin'], vi: ['vie', 'Latin'],
+    az: ['azj', 'Latin'], pt: ['por', 'Latin'], ru: ['rus', 'Cyrillic'], uk: ['ukr', 'Cyrillic'],
+    ar: ['arb', 'Arabic'], ur: ['urd', 'Arabic'], hi: ['hin', 'Devanagari'], bn: [null, 'Bengali'],
+    th: [null, 'Thai'], ja: [null, 'Japanese'], ko: [null, 'Hangul'], zh: [null, 'Han'], cn: [null, 'Han'],
+    ge: [null, 'Georgian'], ka: [null, 'Georgian'],
+    hl: [null, 'Latin'], // Hinglish: Hindi in Latin letters — alphabet only, no trigram model
+  };
+  // MoEngage shows languages by name in some campaigns
+  const NAMES = {
+    english: 'en', german: 'de', deutsch: 'de', spanish: 'es', espanol: 'es', french: 'fr', italian: 'it',
+    dutch: 'nl', norwegian: 'no', swedish: 'se', turkish: 'tr', indonesian: 'id', malay: 'ms',
+    tagalog: 'tl', filipino: 'tl', vietnamese: 'vi', azerbaijani: 'az', portuguese: 'pt', russian: 'ru',
+    ukrainian: 'uk', arabic: 'ar', urdu: 'ur', hindi: 'hi', bengali: 'bn', bangla: 'bn', thai: 'th',
+    japanese: 'ja', korean: 'ko', chinese: 'zh', georgian: 'ka',
+  };
+  // Languages that share most trigrams: a mix-up between them is only a warning.
+  const CLOSE = [['spa', 'por'], ['ind', 'zlm'], ['nob', 'swe'], ['rus', 'ukr'], ['arb', 'urd'], ['tur', 'azj']];
+  const SCRIPT_RE = {
+    Latin: /\p{Script=Latin}/gu, Cyrillic: /\p{Script=Cyrillic}/gu, Arabic: /\p{Script=Arabic}/gu,
+    Devanagari: /\p{Script=Devanagari}/gu, Bengali: /\p{Script=Bengali}/gu, Thai: /\p{Script=Thai}/gu,
+    Hangul: /\p{Script=Hangul}/gu, Han: /\p{Script=Han}/gu, Georgian: /\p{Script=Georgian}/gu,
+    Kana: /[\p{Script=Hiragana}\p{Script=Katakana}]/gu,
+  };
+  const SCRIPT_LABEL = {
+    Latin: 'латиницы', Cyrillic: 'кириллицы', Arabic: 'арабских букв', Devanagari: 'деванагари',
+    Bengali: 'бенгальских букв', Thai: 'тайских букв', Hangul: 'хангыля', Han: 'иероглифов',
+    Japanese: 'японских знаков', Georgian: 'грузинских букв',
+  };
+  const LANG_LABEL = {
+    eng: 'английский', deu: 'немецкий', spa: 'испанский', fra: 'французский', ita: 'итальянский',
+    nld: 'нидерландский', nob: 'норвежский', swe: 'шведский', tur: 'турецкий', ind: 'индонезийский',
+    zlm: 'малайский', tgl: 'тагальский', vie: 'вьетнамский', azj: 'азербайджанский', por: 'португальский',
+    rus: 'русский', ukr: 'украинский', arb: 'арабский', urd: 'урду', hin: 'хинди',
+  };
+  // Names that stay the same in every language (brands, stores, networks).
+  const DEFAULT_KEEP = [
+    'IQ Option', 'IQ Broker', 'IQOption', 'IQ', 'MoEngage',
+    'App Store', 'Google Play', 'AppGallery', 'Apple', 'Android', 'iOS', 'iPhone', 'Windows', 'macOS',
+    'Instagram', 'Telegram', 'Facebook', 'YouTube', 'TikTok', 'WhatsApp', 'LinkedIn', 'Twitter', 'Discord', 'Viber',
+    'Visa', 'Mastercard', 'PayPal', 'Skrill', 'Neteller', 'Bitcoin', 'Ethereum', 'USDT',
+  ];
+
+  // Thresholds (calibrated on the Studio email base: 0 errors on shipped locales).
+  const T = {
+    scriptBlockMin: 8,       // letters in a block before its alphabet is judged
+    scriptBlockShare: 0.25,  // non-Latin locale: below this share of own letters → error
+    latinForeignShare: 0.5,  // Latin locale: above this share of foreign letters → error
+    langLocaleMin: 60,       // letters in a whole locale before its language is judged
+    langBlockMin: 60,        // letters in one block before its language is judged
+    langMargin: 0.02,        // expected language must lose by more than this
+    untranslatedMin: 10,     // letters (and ≥ 2 words) before "same as reference" counts
+    lengthMin: 25,           // reference chars before length ratio counts
+  };
+
+  // ---------- text helpers ----------
+
+  const ENTITIES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', laquo: '«', raquo: '»', ndash: '–', mdash: '—', hellip: '…', copy: '©', reg: '®', trade: '™', euro: '€', zwnj: '', zwj: '', shy: '' };
+  function decodeEntities(s) {
+    return String(s).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+      if (e[0] === '#') {
+        const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+        try { return Number.isFinite(n) ? String.fromCodePoint(n) : m; } catch { return m; }
+      }
+      const v = ENTITIES[e.toLowerCase()];
+      return v === undefined ? m : v;
+    });
+  }
+
+  const VAR_RE = /\$\{\{[\s\S]*?\}\}\$|\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|%%[\w.-]+%%/g;
+  function varsOf(text) {
+    return (String(text || '').match(VAR_RE) || []).map((v) => v.replace(/\s+/g, ''));
+  }
+
+  function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  // Text a reader actually reads: no variables, links, tokens, markers, brand names.
+  function plain(text, keepRe) {
+    let s = decodeEntities(String(text || ''));
+    s = s.replace(VAR_RE, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
+      .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, ' ')
+      .replace(/\b[a-z_]+(?:\.[a-z_]+)+\b/gi, ' ') // embedded.brand_name
+      .replace(/@@/g, ' ');
+    if (keepRe) s = s.replace(keepRe, ' ');
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  function letters(s) { return (String(s).match(/\p{L}/gu) || []).length; }
+  function count(s, script) {
+    if (script === 'Japanese') return count(s, 'Kana') + count(s, 'Han');
+    const re = SCRIPT_RE[script];
+    if (!re) return 0;
+    re.lastIndex = 0;
+    return (String(s).match(re) || []).length;
+  }
+  function words(s) { return String(s).split(/\s+/).filter((w) => /\p{L}/u.test(w)).length; }
+  function norm(s) { return decodeEntities(String(s || '')).replace(/\s+/g, ' ').trim().toLowerCase(); }
+  function sample(s, n = 40) {
+    const t = decodeEntities(String(s || '')).replace(/\s+/g, ' ').trim();
+    return t.length > n ? `${t.slice(0, n)}…` : t;
+  }
+
+  const JUNK = [
+    [/lorem\s+ipsum|dolor\s+sit\s+amet|consectetur\s+adipiscing/i, 'lorem ipsum'],
+    [/(^|[^\p{L}])(TODO|TBD|FIXME|XXX+|PLACEHOLDER)(?=$|[^\p{L}])/u, 'служебная пометка'],
+    [/\?{3,}/, '???'],
+    [/\[\s*(?:text|title|link|insert|placeholder|translate|translation|copy|cta|button|name|текст|перевод)[^\]]*\]/i, 'шаблон в скобках'],
+    [/\b(?:your\s+)?(?:text|title|subtitle|heading|headline|button|copy|description)\s+(?:goes\s+)?here\b/i, '«… here»'],
+    [/\b(?:sample|dummy|test)\s+(?:text|copy|title)\b/i, 'тестовый текст'],
+    [/\b(?:title|subtitle|heading|headline|button|note|link|lead|body|caption|cta|label|step\s+\w+)\s+text\b/i, 'шаблонный текст'],
+    [/(?:^|[^\p{L}])(?:текст|заголовок|подзаголовок|кнопка)\s+(?:здесь|тут)(?=$|[^\p{L}])/iu, '«текст здесь»'],
+    [/\{\{(?![\s\S]*\}\})|(?<!\{\{[\s\S]*)\}\}/, 'незакрытая переменная'],
+  ];
+  function junkIn(text) {
+    const raw = decodeEntities(String(text || ''));
+    for (const [re, label] of JUNK) if (re.test(raw)) return label;
+    return '';
+  }
+  const MOJIBAKE_RE = /�|Ã[\u0080-¿]|â€[\u0080-¿™œ“”˜]|Ð[\u0080-¿]|Ñ[\u0080-\u008F]|Ø[ -¿]|Ù[\u0080-\u008A]/;
+
+  // ---------- language detection (franc's algorithm, trimmed models) ----------
+
+  let MODELS = null; // script → lang → { trigram: rank }
+  function models() {
+    if (MODELS) return MODELS;
+    const data = root.RetKitLocaleLintData?.models || {};
+    MODELS = {};
+    for (const [script, langs] of Object.entries(data)) {
+      MODELS[script] = {};
+      for (const [lang, model] of Object.entries(langs)) {
+        const list = String(model).split('|');
+        const ranks = {};
+        for (let i = list.length - 1; i >= 0; i -= 1) ranks[list[i]] = i;
+        MODELS[script][lang] = ranks;
+      }
+    }
+    return MODELS;
+  }
+  function trigramTuples(value) {
+    const clean = String(value).replace(/[!-@]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    const padded = ` ${clean} `;
+    const dict = {};
+    for (let i = 0; i + 3 <= padded.length; i += 1) {
+      const g = padded.slice(i, i + 3);
+      dict[g] = (dict[g] || 0) + 1;
+    }
+    return Object.entries(dict).sort((a, b) => a[1] - b[1]);
+  }
+  function scriptOfLang(lang) {
+    for (const [script, langs] of Object.entries(models())) if (langs[lang]) return script;
+    return '';
+  }
+  /** [[lang, score 0..1]] best first; candidates limit the race to these languages. */
+  function detect(text, candidates) {
+    const value = String(text || '').slice(0, 2048);
+    if (!value) return [];
+    const all = models();
+    let best = ''; let bestCount = 0;
+    for (const script of Object.keys(all)) {
+      const c = count(value, script);
+      if (c > bestCount) { best = script; bestCount = c; }
+    }
+    if (!best) return [];
+    const tuples = trigramTuples(value);
+    const pool = Object.entries(all[best]).filter(([lang]) => !candidates || candidates.includes(lang));
+    if (!pool.length) return [];
+    const out = pool.map(([lang, ranks]) => {
+      let distance = 0;
+      for (const [g, n] of tuples) {
+        let d = 300;
+        if (g in ranks) { d = n - ranks[g] - 1; if (d < 0) d = -d; }
+        distance += d;
+      }
+      return [lang, distance];
+    }).sort((a, b) => a[1] - b[1]);
+    const min = out[0][1];
+    const max = value.length * 300 - min;
+    return out.map(([lang, d]) => [lang, max > 0 ? 1 - (d - min) / max : 1]);
+  }
+
+  // ---------- locale identity ----------
+
+  function langOf(code) {
+    const raw = String(code || '').trim();
+    if (!raw) return null;
+    const lower = raw.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const base = NAMES[lower] || lower.split(/[_\-\s(]/)[0];
+    const hit = LANGS[base];
+    if (!hit) return { code: raw, base, lang: null, script: null };
+    return { code: raw, base, lang: hit[0], script: hit[1] };
+  }
+  function isClose(a, b) { return CLOSE.some(([x, y]) => (x === a && y === b) || (x === b && y === a)); }
+
+  // ---------- checks ----------
+
+  function issue(locale, block, code, severity, message, text) {
+    const out = { locale, block, code, severity, message };
+    if (text !== undefined && text !== null && String(text).trim()) out.sample = sample(text);
+    return out;
+  }
+
+  function scriptProblem(text, info) {
+    if (!info?.script) return '';
+    // One all-caps Latin word (PROMOCODE, BONUS50) is a code, not a sentence.
+    if (info.script !== 'Latin' && /^[A-Z0-9][A-Z0-9_-]*$/.test(String(text).trim())) return '';
+    const n = letters(text);
+    if (n < T.scriptBlockMin) return '';
+    if (info.script === 'Latin') {
+      const foreign = n - count(text, 'Latin');
+      return foreign / n > T.latinForeignShare ? `латиницы ${Math.round(100 * (n - foreign) / n)}%` : '';
+    }
+    const own = count(text, info.script);
+    return own / n < T.scriptBlockShare ? `${SCRIPT_LABEL[info.script]} ${Math.round(100 * own / n)}%` : '';
+  }
+
+  function langProblem(text, info, minLetters) {
+    if (!info?.lang) {
+      // alphabet-only languages: Japanese must have kana, Chinese must not be mostly kana
+      const n = letters(text);
+      if (n < minLetters) return null;
+      if (info?.script === 'Japanese' && count(text, 'Kana') === 0 && count(text, 'Han') / n > 0.6) return { found: 'китайский', close: true };
+      if (info?.script === 'Han' && count(text, 'Kana') / n > 0.15) return { found: 'японский', close: true };
+      return null;
+    }
+    if (letters(text) < minLetters) return null;
+    const script = scriptOfLang(info.lang);
+    if (count(text, script) / Math.max(1, letters(text)) < 0.5) return null; // alphabet check owns this case
+    const candidates = Object.keys(models()[script] || {});
+    const ranked = detect(text, candidates);
+    if (!ranked.length || ranked[0][0] === info.lang) return null;
+    const mine = ranked.find(([lang]) => lang === info.lang);
+    if (mine && ranked[0][1] - mine[1] <= T.langMargin) return null;
+    return { found: LANG_LABEL[ranked[0][0]] || ranked[0][0], lang: ranked[0][0], close: isClose(ranked[0][0], info.lang) };
+  }
+
+  function pickRef(codes, refCode) {
+    if (refCode && codes.includes(refCode)) return refCode;
+    return codes.find((c) => /^en$/i.test(c)) || codes.find((c) => /^en(?:$|[_-])/i.test(c)) || codes.find((c) => langOf(c)?.lang === 'eng')
+      || codes.find((c) => /^default$/i.test(c)) || codes[0];
+  }
+
+  /**
+   * @param {{locales: Record<string,string[]|object>, refCode?: string, mode?: 'txt'|'html', keep?: string[]}} opts
+   */
+  function lint({ locales = {}, refCode, mode = 'txt', keep } = {}) {
+    const codes = Object.keys(locales || {}).filter((c) => locales[c] && typeof locales[c] === 'object');
+    if (!codes.length) return { ok: true, version: VERSION, refCode: null, locales: {}, issues: [], summary: 'нет локалей' };
+    const ref = pickRef(codes, refCode);
+    const keepList = [...DEFAULT_KEEP, ...(Array.isArray(keep) ? keep : [])].filter(Boolean).sort((a, b) => b.length - a.length);
+    const keepRe = new RegExp(`(?:^|(?<=[^\\p{L}]))(?:${keepList.map(escapeRe).join('|')})(?=$|[^\\p{L}])`, 'giu');
+    const refEntries = entriesOf(locales[ref]);
+    const refBlocks = refEntries.map(([, t]) => t);
+    const refMap = new Map(refEntries);
+    const keyed = !Array.isArray(locales[ref]);
+    let refInfo = langOf(ref);
+    if (!refInfo?.lang && !refInfo?.script) {
+      // DEFAULT / unknown reference: take the language its text is written in
+      const guess = detect(refBlocks.map((b) => plain(b, keepRe)).join(' \n '));
+      if (guess.length) refInfo = { code: ref, base: ref, lang: guess[0][0], script: scriptOfLang(guess[0][0]) };
+    }
+    const refNormSet = new Set(refBlocks.map(norm));
+    const issues = [];
+    const perLocale = {};
+    const refBad = new Set(); // reference blocks not in the reference language
+
+    for (const code of [ref, ...codes.filter((c) => c !== ref)]) {
+      const entries = entriesOf(locales[code]);
+      const blocks = entries.map(([, t]) => t);
+      const isRef = code === ref;
+      const info = isRef ? refInfo : langOf(code);
+      const sameLang = !isRef && info?.lang && refInfo?.lang && info.lang === refInfo.lang;
+      const found = [];
+      const add = (...a) => found.push(issue(code, ...a));
+      const flagged = new Set();
+      const broken = new Set(); // empty / junk / encoding / untranslated: already reported, kept out of the whole-locale check
+
+      // structure
+      if (!isRef && mode === 'txt' && keyed) {
+        const have = new Set(entries.map(([id]) => id));
+        for (const [id, refText] of refEntries) {
+          if (!have.has(id) && letters(plain(refText, keepRe)) > 0) add(id, 'missing_block', 'error', `нет ключа, в ${ref}: «${sample(refText, 30)}»`);
+        }
+      }
+      if (!isRef && mode === 'txt' && !keyed && blocks.length !== refBlocks.length) {
+        add(null, 'missing_block', 'error', `${blocks.length} блоков, в ${ref} — ${refBlocks.length}`);
+      }
+      if (!isRef && mode === 'html' && refBlocks.length >= 4 && blocks.length < refBlocks.length * 0.6) {
+        add(null, 'missing_block', 'error', `${blocks.length} текстовых фрагментов, в ${ref} — ${refBlocks.length}`);
+      }
+      if (!isRef && mode === 'html') {
+        const a = varsOf(refBlocks.join('\n')).sort().join(' ');
+        const b = varsOf(blocks.join('\n')).sort().join(' ');
+        if (a !== b) {
+          const missing = diff(varsOf(refBlocks.join('\n')), varsOf(blocks.join('\n')));
+          const extra = diff(varsOf(blocks.join('\n')), varsOf(refBlocks.join('\n')));
+          add(null, 'var_mismatch', 'error', [missing.length ? `нет ${missing.slice(0, 3).join(' ')}` : '', extra.length ? `лишние ${extra.slice(0, 3).join(' ')}` : ''].filter(Boolean).join('; '));
+        }
+      }
+
+      entries.forEach(([i, text]) => {
+        const refText = mode === 'txt' ? refMap.get(i) : undefined;
+        const visible = plain(text, keepRe);
+        // empty
+        if (!isRef && mode === 'txt' && refText !== undefined && letters(plain(refText, keepRe)) > 0 && !text.trim()) {
+          add(i, 'empty', 'error', `пусто, в ${ref}: «${sample(refText, 30)}»`); flagged.add(i); broken.add(i); return;
+        }
+        // junk & encoding — every locale, the reference included
+        const junk = junkIn(text);
+        if (junk) { add(i, 'placeholder', 'error', junk, text); flagged.add(i); broken.add(i); }
+        if (MOJIBAKE_RE.test(text)) { add(i, 'mojibake', 'error', 'сломанная кодировка', text); flagged.add(i); broken.add(i); }
+        if (isRef) {
+          // The reference must itself be in its language: an English locale with
+          // Russian text is reported once here, not as "untranslated" everywhere.
+          if (!flagged.has(i)) {
+            const bad = scriptProblem(visible, info);
+            const lp = bad ? null : langProblem(visible, info, T.langBlockMin);
+            if (bad || lp) {
+              add(i, bad ? 'wrong_script' : 'wrong_lang', bad ? 'error' : 'warn', bad ? `эталон: ${bad}` : `эталон похож на ${lp.found}`, text);
+              refBad.add(mode === 'txt' ? i : norm(text));
+            }
+          }
+          return;
+        }
+        // variables & bold markers
+        if (mode === 'txt' && refText !== undefined) {
+          const missing = diff(varsOf(refText), varsOf(text));
+          const extra = diff(varsOf(text), varsOf(refText));
+          if (missing.length || extra.length) {
+            add(i, 'var_mismatch', 'error', [missing.length ? `нет ${missing.join(' ')}` : '', extra.length ? `лишние ${extra.join(' ')}` : ''].filter(Boolean).join('; '), text);
+            flagged.add(i);
+          }
+          const marks = (text.match(/@@/g) || []).length;
+          const refMarks = (refText.match(/@@/g) || []).length;
+          if (marks % 2 || marks !== refMarks) { add(i, 'markup', 'error', `@@ жирный: ${marks / 2 | 0} вместо ${refMarks / 2 | 0}`, text); flagged.add(i); }
+        }
+        // same text as a reference block that is itself broken: reported once, in the reference
+        if (!flagged.has(i) && (mode === 'txt' ? refBad.has(i) && norm(text) === norm(refText) : refBad.has(norm(text)))) {
+          flagged.add(i); broken.add(i); return;
+        }
+        // untranslated
+        if (!sameLang && !flagged.has(i)) {
+          const same = mode === 'txt' ? (refText !== undefined && norm(text) === norm(refText)) : refNormSet.has(norm(text));
+          if (same && letters(visible) >= T.untranslatedMin && words(visible) >= 2) {
+            add(i, 'untranslated', 'error', `как в ${ref}`, text); flagged.add(i); broken.add(i); return;
+          }
+        }
+        // alphabet
+        if (!flagged.has(i)) {
+          const bad = scriptProblem(visible, info);
+          if (bad) { add(i, 'wrong_script', 'error', bad, text); flagged.add(i); return; }
+        }
+        // one long block in another language
+        if (!flagged.has(i)) {
+          const lp = langProblem(visible, info, T.langBlockMin);
+          if (lp) { add(i, 'wrong_lang', 'warn', `похоже на ${lp.found}`, text); flagged.add(i); }
+        }
+        // length
+        if (mode === 'txt' && refText !== undefined && !flagged.has(i)) {
+          const r = plain(refText, keepRe); const t = visible;
+          if (r.length >= T.lengthMin && t.length) {
+            const ratio = t.length / r.length;
+            const cjk = ['Han', 'Japanese', 'Hangul', 'Thai'].includes(info?.script);
+            if (ratio > 3 || ratio < (cjk ? 0.15 : 0.33)) add(i, 'length', 'warn', `длина ×${ratio.toFixed(1)} к ${ref}`, text);
+          }
+        }
+      });
+
+      // whole-locale language and alphabet
+      if (!isRef) {
+        const whole = entries.filter(([i]) => !broken.has(i)).map(([, t]) => t).map((b) => plain(b, keepRe)).join(' \n ');
+        const n = letters(whole);
+        if (info?.script && n >= T.langLocaleMin) {
+          const own = info.script === 'Latin' ? count(whole, 'Latin') : count(whole, info.script);
+          if (own / n < 0.5) add(null, 'wrong_script', 'error', `во всей локали ${SCRIPT_LABEL[info.script]} ${Math.round(100 * own / n)}%`);
+          else {
+            const lp = langProblem(whole, info, T.langLocaleMin);
+            if (lp) {
+              // one locale-level verdict instead of the same warning on every long block
+              for (let k = found.length - 1; k >= 0; k -= 1) if (found[k].code === 'wrong_lang') found.splice(k, 1);
+              add(null, 'wrong_lang', lp.close ? 'warn' : 'error', `локаль похожа на ${lp.found}`);
+            }
+          }
+        }
+        if (!info?.script) perLocale[code] = { note: 'язык локали не известен — проверены только структура, мусор и непереведённое' };
+      }
+
+      const errors = found.filter((x) => x.severity === 'error').length;
+      const warnings = found.length - errors;
+      perLocale[code] = {
+        ...(perLocale[code] || {}),
+        status: errors ? 'error' : warnings ? 'warn' : 'ok',
+        errors, warnings, blocks: blocks.length,
+        ...(isRef ? { reference: true } : {}),
+        lang: info?.lang || info?.script || null,
+      };
+      issues.push(...found);
+    }
+
+    const result = { ok: !issues.some((x) => x.severity === 'error'), version: VERSION, mode, refCode: ref, refBlocks: refBlocks.length, locales: perLocale, issues };
+    result.summary = summaryLine(result);
+    return result;
+  }
+
+  // [[id, text]]: arrays keep their order (id = index), keyed JSON is flattened to dotted keys
+  function entriesOf(value) {
+    if (Array.isArray(value)) return value.map((t, i) => [i, typeof t === 'string' ? t : String(t ?? '')]);
+    const out = [];
+    const walk = (v, key) => {
+      if (typeof v === 'string') out.push([key, v]);
+      else if (Array.isArray(v)) v.forEach((x, i) => walk(x, key ? `${key}.${i}` : String(i)));
+      else if (v && typeof v === 'object') for (const k of Object.keys(v)) walk(v[k], key ? `${key}.${k}` : k);
+    };
+    walk(value, '');
+    return out;
+  }
+
+  function diff(a, b) {
+    const left = new Map();
+    for (const x of b) left.set(x, (left.get(x) || 0) + 1);
+    const out = [];
+    for (const x of a) { const c = left.get(x) || 0; if (c) left.set(x, c - 1); else out.push(x); }
+    return out;
+  }
+
+  // ---------- MoEngage: one HTML per locale ----------
+
+  const INLINE = 'a|b|strong|i|em|u|span|font|sup|sub|small|big|s|strike|mark|abbr|code|label';
+  function textsFromHtml(html) {
+    let s = String(html || '');
+    s = s.replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<head[\s>][\s\S]*?<\/head>/gi, ' ')
+      .replace(/<(style|script|noscript|title)[\s>][\s\S]*?<\/\1>/gi, ' ');
+    // alt texts are read too (images off, screen readers)
+    s = s.replace(/<img\b[^>]*?\balt\s*=\s*("([^"]*)"|'([^']*)')[^>]*>/gi, (m, _q, a, b) => `\u0000${a ?? b ?? ''}\u0000`);
+    s = s.replace(/<br\s*\/?>/gi, ' ');
+    s = s.replace(new RegExp(`<\\/?(?:${INLINE})(?:\\s[^>]*)?>`, 'gi'), '');
+    s = s.replace(/<[^>]*>/g, '\u0000');
+    return s.split('\u0000')
+      .map((t) => decodeEntities(t).replace(/[\s​-‍﻿͏]+/g, ' ').trim())
+      .filter((t) => /\p{L}/u.test(t) || /\{\{|\{%/.test(t));
+  }
+
+  function lintHtml({ htmlByLocale = {}, refCode, keep } = {}) {
+    const locales = {};
+    for (const [code, html] of Object.entries(htmlByLocale || {})) locales[code] = textsFromHtml(html);
+    return lint({ locales, refCode, mode: 'html', keep });
+  }
+
+  // ---------- output ----------
+
+  function summaryLine(result) {
+    const parts = [];
+    for (const [code, s] of Object.entries(result.locales || {})) {
+      if (s.reference) { parts.push(`${code}${s.errors ? ` 🔴${s.errors}` : ''}${s.warnings ? ` 🟡${s.warnings}` : ''} (эталон)`); continue; }
+      parts.push(s.status === 'ok' ? `${code} ✓` : `${code}${s.errors ? ` 🔴${s.errors}` : ''}${s.warnings ? ` 🟡${s.warnings}` : ''}`);
+    }
+    return parts.join(' · ');
+  }
+
+  /** Compact text for agents: one summary line, then one line per issue. */
+  function format(result, { detail = 'errors', locale, limit = 40 } = {}) {
+    if (!result) return '';
+    const head = `locale-lint ${result.version} · эталон ${result.refCode} · ${result.ok ? 'ошибок нет' : 'есть ошибки'}\n${result.summary}`;
+    if (detail === 'summary') return head;
+    let list = result.issues || [];
+    if (locale) list = list.filter((x) => x.locale === locale);
+    if (detail !== 'all') list = list.filter((x) => x.severity === 'error');
+    const lines = list.slice(0, limit).map((x) => `${x.severity === 'error' ? '🔴' : '🟡'} ${x.locale} ${x.block === null || x.block === undefined ? 'локаль' : `#${x.block}`} ${x.code} ${x.message}${x.sample ? ` «${x.sample}»` : ''}`);
+    if (list.length > limit) lines.push(`… ещё ${list.length - limit}`);
+    const warnHint = detail !== 'all' && (result.issues || []).some((x) => x.severity === 'warn') ? '\n(🟡 предупреждения: detail=all)' : '';
+    return lines.length ? `${head}\n${lines.join('\n')}${warnHint}` : head + warnHint;
+  }
+
+  function fingerprint(locales) {
+    let h = 0x811c9dc5;
+    const s = JSON.stringify(Object.keys(locales || {}).sort().map((k) => [k, locales[k]]));
+    for (let i = 0; i < s.length; i += 1) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return `${VERSION}:${h.toString(36)}`;
+  }
+
+  const api = { VERSION, lint, lintHtml, textsFromHtml, format, langOf, detect, fingerprint, plain, thresholds: T };
+  root.RetKitLocaleLint = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 // GENERATED from retantion-future/email-base/tools/rtl.js by scripts/sync-rtl-core.mjs.
@@ -6323,7 +7111,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.9.9',
+          clientVersion: '0.10.0',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -6517,6 +7305,11 @@ module.exports = { isRtlLocale, applyRtl };
       return { ...plan, note: args?.replacement !== undefined ? 'Замена подготовлена и показана человеку — нажимает он.' : undefined };
     }
     if (tool === 'validator') { requireWorkspace(); return { issues: ws().getValidatorIssues?.() || [] }; }
+    if (tool === 'lint_locales') {
+      requireWorkspace();
+      if (typeof ws().lintLocales !== 'function') throw new Error('Проверка локалей недоступна в этой версии RetKit');
+      return ws().lintLocales({ walk: args?.walk !== false, detail: args?.detail || 'errors', locale: args?.locale || '' });
+    }
     throw new Error(`Неизвестная команда: ${tool}`);
   }
 
@@ -6566,6 +7359,7 @@ module.exports = { isRtlLocale, applyRtl };
     switch_locale: 'переключил локаль',
     find_across_locales: 'искал по локалям',
     validator: 'проверил ошибки HTML',
+    lint_locales: 'проверил локали',
   };
   function feedText(tool, args, reply) {
     const locale = normLocale(reply?.result?.locale || args?.locale || '');
@@ -6874,6 +7668,9 @@ module.exports = { isRtlLocale, applyRtl };
         });
         return { proposalId: proposal.id, status: proposal.status };
       }
+      case 'lint_locales':
+        if (typeof api.lintLocales !== 'function') throw proposalError('UNSUPPORTED', 'Locale check is unavailable');
+        return await api.lintLocales({ walk: args.walk !== false, detail: args.detail || 'errors', locale: args.locale || '' });
       case 'find_across_locales':
         if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales search is unavailable');
         return await api.acrossLocales({ query: args.query, mode: args.mode });
@@ -9190,7 +9987,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.9.9');
+    setTextContentIfChanged(version, 'v0.10.0');
     return true;
   }
 
@@ -10575,6 +11372,7 @@ module.exports = { isRtlLocale, applyRtl };
       const tab = document.createElement('button');
       tab.type = 'button';
       tab.className = `rk-v052-locale-tab${locale === active ? ' rk-active' : ''}`;
+      tab.dataset.rkLocale = String(locale).toUpperCase();
       tab.textContent = localeUiLabel(locale);
       tab.title = `Switch MoEngage to ${locale}`;
       tab.addEventListener('click', async () => {
@@ -10644,6 +11442,8 @@ module.exports = { isRtlLocale, applyRtl };
       hint.textContent = 'Locales…';
       strip.appendChild(hint);
     }
+    // Red/yellow dots of the locale check (src/shared/locale-lint.js) survive re-renders.
+    try { root.__RetKitMoEngageCore?.applyLocaleLintMarks?.(); } catch {}
   }
 
   function findByExactText(rootNode, labels, selector = 'button,[role="button"],a,span,div,label') {
@@ -12930,7 +13730,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.9.9' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.10.0' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -12956,7 +13756,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.9.9 loaded');
+    console.log('[RetKit] MoEngage bridge v0.10.0 loaded');
   }
 
   bootBridge();

@@ -75,3 +75,10 @@ const replaceSrc = path.join(root, 'src/shared/replace-across.js');
 const replaceOut = path.join(root, 'shared/replace-across.js');
 fs.writeFileSync(replaceOut, fs.readFileSync(replaceSrc, 'utf8'));
 console.log(`Built ${path.relative(root, replaceOut)}`);
+
+// Locale checker (+ its language models): same rules in Retention Future Studio.
+for (const name of ['locale-lint.js', 'locale-lint-data.js']) {
+  const out = path.join(root, 'shared', name);
+  fs.writeFileSync(out, fs.readFileSync(path.join(root, 'src/shared', name), 'utf8'));
+  console.log(`Built ${path.relative(root, out)}`);
+}

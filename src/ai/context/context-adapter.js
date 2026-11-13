@@ -198,6 +198,9 @@
         });
         return { proposalId: proposal.id, status: proposal.status };
       }
+      case 'lint_locales':
+        if (typeof api.lintLocales !== 'function') throw proposalError('UNSUPPORTED', 'Locale check is unavailable');
+        return await api.lintLocales({ walk: args.walk !== false, detail: args.detail || 'errors', locale: args.locale || '' });
       case 'find_across_locales':
         if (typeof api.acrossLocales !== 'function') throw proposalError('UNSUPPORTED', 'Across-locales search is unavailable');
         return await api.acrossLocales({ query: args.query, mode: args.mode });
