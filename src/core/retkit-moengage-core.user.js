@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.0
+// @version      0.10.1
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1032,6 +1032,7 @@
     localeLint: null,
     localeLintKey: '',
     localeLintTimer: null,
+    localeLintRetryTimer: null,
     wrap: localStorage.getItem('retkit-mo-wrap') !== 'false',
     previewMode: localStorage.getItem('retkit-mo-preview-mode') || 'desktop',
     splitPercent: Number(localStorage.getItem('retkit-mo-split') || 50),
@@ -2549,7 +2550,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2574,7 +2575,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.10.0',
+        version: '0.10.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3049,6 +3050,11 @@
       // revision. Never let the result of that older commit change local state.
       if (!stillCurrent) {
         STATE.pendingApply = true;
+        // Our older revision did land in MoEngage: remember it, or the next sync
+        // compares MoEngage with the pre-edit HTML and, after a big paste,
+        // mistakes our own write for "another locale" (live case 16.11, fast undo).
+        const nativeNow = (getNativeEditor() || native)?.getValue?.() || '';
+        if (result?.ok && nativeNow && htmlEquivalentForSync(nativeNow, next)) rememberNativeHtml(nativeNow);
         diagBreadcrumb('sync.stale-result', { startedRevision, currentRevision: STATE.editRevision });
         status('Newer local edit waiting to sync…', 'neutral');
         return false;
@@ -3748,7 +3754,14 @@
     const code = currentBridgeLocale();
     // Only when the editor really shows this locale (not mid-switch).
     if (!code || !STATE.boundLocale || String(STATE.boundLocale).toUpperCase() !== code) return;
-    if (STATE.multiLocaleBusy || Date.now() < (Number(STATE.localeSwitchUntil) || 0)) return;
+    const waitMs = (Number(STATE.localeSwitchUntil) || 0) - Date.now();
+    if (STATE.multiLocaleBusy || waitMs > 0) {
+      // Not now — but do not drop the edit: re-read the editor once the switch
+      // window is over (an undo right after a re-bind used to keep the old dot).
+      clearTimeout(STATE.localeLintRetryTimer);
+      STATE.localeLintRetryTimer = setTimeout(() => rememberActiveLocaleHtml(STATE.overlayEditor?.getValue?.() || ''), Math.max(400, waitMs + 150));
+      return;
+    }
     if (STATE.localeHtmlCache[code] === html) return;
     STATE.localeHtmlCache[code] = String(html || '');
     scheduleLocaleLint();
@@ -4021,7 +4034,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.10.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.1 loaded');
   }
 
   boot();

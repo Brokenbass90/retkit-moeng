@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+- Fix: paste → fast Cmd+Z while a sync was in flight could report “MoEngage now shows a different email — another locale?” and re-load the editor. A stale sync now remembers what it wrote.
+- Fix: the locale dot did not go away after undo right after a locale re-bind — the edit is re-checked when the switch window ends.
+- Locale check: `${{ ns.block_NN }}$` left in text is 🔴 (locale text never arrived); MoEngage content blocks `…_EN` / `…_FR` match per locale, the EN block inside FR is 🟡.
+
 ## 0.10.0
 
 - Locale check (`src/shared/locale-lint.js`, the same file Retention Studio uses): every locale against EN — wrong language or alphabet, untranslated text, missing text, changed {{variables}}, draft junk (lorem ipsum, TODO, “Title text”, [translate]…), broken encoding. Locale tabs get a red/yellow dot with the reasons in the tooltip; “🌐 Locales” walks all locales and lists issues (click → that locale). Offline: trigram models from franc (MIT), trimmed to RetKit languages.

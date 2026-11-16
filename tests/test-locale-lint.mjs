@@ -66,6 +66,27 @@ assert.equal(r.ok, false);
 r = L.lint({ locales: { en, ar: ar.map((t, i) => (i === 4 ? 'If you need help, contact our @@Support Team@@ at any time.' : t)) } });
 assert.deepEqual(codes(r, 'ar'), ['ar#4:wrong_script:error']);
 
+// 3b. A short word in another alphabet inside a Latin locale (live case: Greek in fr).
+r = L.lint({ locales: { en, fr: es.map((t, i) => (i === 6 ? 'δσωσδω' : t)) } });
+assert.ok(codes(r, 'fr').includes('fr#6:wrong_script:error'), codes(r, 'fr').join());
+// …and a locale that lost its blocks is red even with one line left.
+r = L.lint({ locales: { en, fr: ['δσωσδω'] } });
+assert.ok(codes(r, 'fr').includes('fr#-:missing_block:error'), codes(r, 'fr').join());
+
+// 3c. Live placeholders: MoEngage content blocks and embedded.* are fine (the _EN/_FR suffix is
+// per locale), the EN block inside FR is a warning, an unresolved ${{ ns.block_NN }}$ is an error.
+{
+  const page = (lang, title, block) => `<html><body><h1>${title}</h1><p>{{ContentBlock['iq_risk_warning_noreg_${block}']}}</p><p class="address-text">{{embedded.company_address}}</p></body></html>`;
+  r = L.lintHtml({ htmlByLocale: { EN: page('en', 'Your account is verified now', 'EN'), FR: page('fr', 'Votre compte est maintenant vérifié', 'FR') } });
+  assert.deepEqual(codes(r), [], JSON.stringify(r.issues));
+  r = L.lintHtml({ htmlByLocale: { EN: page('en', 'Your account is verified now', 'EN'), FR: page('fr', 'Votre compte est maintenant vérifié', 'EN') } });
+  assert.ok(codes(r, 'FR').some((c) => c.endsWith(':var_mismatch:warn')), codes(r).join());
+  r = L.lintHtml({ htmlByLocale: { EN: page('en', 'Your account is verified now', 'EN'), FR: page('fr', '${{ fraud.block_01 }}$', 'FR') } });
+  assert.ok(codes(r, 'FR').some((c) => c.endsWith(':placeholder:error')), codes(r).join());
+  r = L.lint({ locales: { en, fr: es.map((t, i) => (i === 1 ? '${{ fraud.block_01 }}$' : t)) } });
+  assert.ok(codes(r, 'fr').includes('fr#1:placeholder:error'), codes(r).join());
+}
+
 // 4. Spanish text in the French locale: language.
 r = L.lint({ locales: { en, fr: es.slice() } });
 assert.ok(codes(r, 'fr').includes('fr#-:wrong_lang:error'), JSON.stringify(r.issues));

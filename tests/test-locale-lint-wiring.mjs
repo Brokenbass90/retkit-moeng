@@ -15,3 +15,8 @@ assert.ok(read('src/ai/client/agent-relay.js').includes("tool === 'lint_locales'
 assert.ok(read('bridge/src/tools/retkit-tools.mjs').includes("name: 'lint_locales'"), 'bridge tool list has lint_locales');
 for (const f of ['locale-lint.js', 'locale-lint-data.js']) assert.equal(read(`shared/${f}`), read(`src/shared/${f}`), `shared/${f} is published as is`);
 console.log('✓ locale-lint wiring: dist, workspace API, tab marks, agent relay, bridge tool, shared/ copies');
+
+// Live case 16.11: paste → fast undo while a sync is in flight.
+assert.ok(core.includes("if (result?.ok && nativeNow && htmlEquivalentForSync(nativeNow, next)) rememberNativeHtml(nativeNow);"), 'a stale sync still remembers what it wrote');
+assert.ok(core.includes('STATE.localeLintRetryTimer = setTimeout(() => rememberActiveLocaleHtml('), 'an edit during the switch window is re-checked, not dropped');
+console.log('✓ live fixes: stale sync remembers its write; locale dot follows undo');

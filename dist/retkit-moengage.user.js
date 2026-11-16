@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.0
+// @version      0.10.1
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1800,6 +1800,7 @@
     localeLint: null,
     localeLintKey: '',
     localeLintTimer: null,
+    localeLintRetryTimer: null,
     wrap: localStorage.getItem('retkit-mo-wrap') !== 'false',
     previewMode: localStorage.getItem('retkit-mo-preview-mode') || 'desktop',
     splitPercent: Number(localStorage.getItem('retkit-mo-split') || 50),
@@ -3317,7 +3318,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3342,7 +3343,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.10.0',
+        version: '0.10.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3817,6 +3818,11 @@
       // revision. Never let the result of that older commit change local state.
       if (!stillCurrent) {
         STATE.pendingApply = true;
+        // Our older revision did land in MoEngage: remember it, or the next sync
+        // compares MoEngage with the pre-edit HTML and, after a big paste,
+        // mistakes our own write for "another locale" (live case 16.11, fast undo).
+        const nativeNow = (getNativeEditor() || native)?.getValue?.() || '';
+        if (result?.ok && nativeNow && htmlEquivalentForSync(nativeNow, next)) rememberNativeHtml(nativeNow);
         diagBreadcrumb('sync.stale-result', { startedRevision, currentRevision: STATE.editRevision });
         status('Newer local edit waiting to sync…', 'neutral');
         return false;
@@ -4516,7 +4522,14 @@
     const code = currentBridgeLocale();
     // Only when the editor really shows this locale (not mid-switch).
     if (!code || !STATE.boundLocale || String(STATE.boundLocale).toUpperCase() !== code) return;
-    if (STATE.multiLocaleBusy || Date.now() < (Number(STATE.localeSwitchUntil) || 0)) return;
+    const waitMs = (Number(STATE.localeSwitchUntil) || 0) - Date.now();
+    if (STATE.multiLocaleBusy || waitMs > 0) {
+      // Not now — but do not drop the edit: re-read the editor once the switch
+      // window is over (an undo right after a re-bind used to keep the old dot).
+      clearTimeout(STATE.localeLintRetryTimer);
+      STATE.localeLintRetryTimer = setTimeout(() => rememberActiveLocaleHtml(STATE.overlayEditor?.getValue?.() || ''), Math.max(400, waitMs + 150));
+      return;
+    }
     if (STATE.localeHtmlCache[code] === html) return;
     STATE.localeHtmlCache[code] = String(html || '');
     scheduleLocaleLint();
@@ -4789,7 +4802,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.10.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.1 loaded');
   }
 
   boot();
@@ -5123,7 +5136,8 @@
 
   // Thresholds (calibrated on the Studio email base: 0 errors on shipped locales).
   const T = {
-    scriptBlockMin: 8,       // letters in a block before its alphabet is judged
+    scriptBlockMin: 8,       // letters in a block before its alphabet is judged (non-Latin locales: brands stay Latin)
+    latinBlockMin: 3,        // same for Latin locales
     scriptBlockShare: 0.25,  // non-Latin locale: below this share of own letters → error
     latinForeignShare: 0.5,  // Latin locale: above this share of foreign letters → error
     langLocaleMin: 60,       // letters in a whole locale before its language is judged
@@ -5148,8 +5162,21 @@
   }
 
   const VAR_RE = /\$\{\{[\s\S]*?\}\}\$|\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|%%[\w.-]+%%/g;
+  // Locale suffix inside a MoEngage content block name: ContentBlock['iq_risk_warning_noreg_EN'] / …_ES_ES'].
+  const BLOCK_LOCALE_RE = /[_-]([A-Za-z]{2})(?:[_-][A-Za-z]{2})?(?=['"]\s*\])/;
+  // Variables compare without whitespace and without that suffix: _EN in en and _FR in fr are the same block.
   function varsOf(text) {
-    return (String(text || '').match(VAR_RE) || []).map((v) => v.replace(/\s+/g, ''));
+    return (String(text || '').match(VAR_RE) || []).map((v) => v.replace(/\s+/g, '').replace(BLOCK_LOCALE_RE, ''));
+  }
+  // Studio placeholder ${{ ns.block_NN }}$ left in text = the locale text never arrived.
+  const UNRESOLVED_RE = /\$\{\{\s*[\w.-]+\s*\}\}\$/;
+  /** Content blocks of the reference language used in another locale (…_EN inside FR). */
+  function foreignBlocks(text, refBase, ownBase) {
+    if (!refBase || !ownBase || refBase === ownBase) return [];
+    return (String(text || '').match(VAR_RE) || []).filter((v) => {
+      const m = v.match(BLOCK_LOCALE_RE);
+      return m && m[1].toLowerCase() === refBase;
+    });
   }
 
   function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -5286,7 +5313,8 @@
     // One all-caps Latin word (PROMOCODE, BONUS50) is a code, not a sentence.
     if (info.script !== 'Latin' && /^[A-Z0-9][A-Z0-9_-]*$/.test(String(text).trim())) return '';
     const n = letters(text);
-    if (n < T.scriptBlockMin) return '';
+    // Latin locale: even a short word in Greek/Cyrillic/Arabic letters is wrong.
+    if (n < (info.script === 'Latin' ? T.latinBlockMin : T.scriptBlockMin)) return '';
     if (info.script === 'Latin') {
       const foreign = n - count(text, 'Latin');
       return foreign / n > T.latinForeignShare ? `латиницы ${Math.round(100 * (n - foreign) / n)}%` : '';
@@ -5387,8 +5415,15 @@
           add(i, 'empty', 'error', `пусто, в ${ref}: «${sample(refText, 30)}»`); flagged.add(i); broken.add(i); return;
         }
         // junk & encoding — every locale, the reference included
-        const junk = junkIn(text);
+        if (UNRESOLVED_RE.test(text)) {
+          add(i, 'placeholder', 'error', 'плейсхолдер ${{ }}$ не подставлен — текст локали не подтянулся', text); flagged.add(i); broken.add(i);
+        }
+        const junk = flagged.has(i) ? '' : junkIn(text);
         if (junk) { add(i, 'placeholder', 'error', junk, text); flagged.add(i); broken.add(i); }
+        if (!isRef) {
+          const foreign = foreignBlocks(text, refInfo?.base, info?.base);
+          if (foreign.length) add(i, 'var_mismatch', 'warn', `в локали ${code} блок для ${ref}: ${foreign[0].replace(/\s+/g, '').slice(0, 60)}`);
+        }
         if (MOJIBAKE_RE.test(text)) { add(i, 'mojibake', 'error', 'сломанная кодировка', text); flagged.add(i); broken.add(i); }
         if (isRef) {
           // The reference must itself be in its language: an English locale with
@@ -7111,7 +7146,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.10.0',
+          clientVersion: '0.10.1',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -9987,7 +10022,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.10.0');
+    setTextContentIfChanged(version, 'v0.10.1');
     return true;
   }
 
@@ -13730,7 +13765,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.10.0' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.10.1' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -13756,7 +13791,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.10.0 loaded');
+    console.log('[RetKit] MoEngage bridge v0.10.1 loaded');
   }
 
   bootBridge();

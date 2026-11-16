@@ -84,7 +84,8 @@
 
   // Thresholds (calibrated on the Studio email base: 0 errors on shipped locales).
   const T = {
-    scriptBlockMin: 8,       // letters in a block before its alphabet is judged
+    scriptBlockMin: 8,       // letters in a block before its alphabet is judged (non-Latin locales: brands stay Latin)
+    latinBlockMin: 3,        // same for Latin locales
     scriptBlockShare: 0.25,  // non-Latin locale: below this share of own letters → error
     latinForeignShare: 0.5,  // Latin locale: above this share of foreign letters → error
     langLocaleMin: 60,       // letters in a whole locale before its language is judged
@@ -109,8 +110,21 @@
   }
 
   const VAR_RE = /\$\{\{[\s\S]*?\}\}\$|\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|%%[\w.-]+%%/g;
+  // Locale suffix inside a MoEngage content block name: ContentBlock['iq_risk_warning_noreg_EN'] / …_ES_ES'].
+  const BLOCK_LOCALE_RE = /[_-]([A-Za-z]{2})(?:[_-][A-Za-z]{2})?(?=['"]\s*\])/;
+  // Variables compare without whitespace and without that suffix: _EN in en and _FR in fr are the same block.
   function varsOf(text) {
-    return (String(text || '').match(VAR_RE) || []).map((v) => v.replace(/\s+/g, ''));
+    return (String(text || '').match(VAR_RE) || []).map((v) => v.replace(/\s+/g, '').replace(BLOCK_LOCALE_RE, ''));
+  }
+  // Studio placeholder ${{ ns.block_NN }}$ left in text = the locale text never arrived.
+  const UNRESOLVED_RE = /\$\{\{\s*[\w.-]+\s*\}\}\$/;
+  /** Content blocks of the reference language used in another locale (…_EN inside FR). */
+  function foreignBlocks(text, refBase, ownBase) {
+    if (!refBase || !ownBase || refBase === ownBase) return [];
+    return (String(text || '').match(VAR_RE) || []).filter((v) => {
+      const m = v.match(BLOCK_LOCALE_RE);
+      return m && m[1].toLowerCase() === refBase;
+    });
   }
 
   function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -247,7 +261,8 @@
     // One all-caps Latin word (PROMOCODE, BONUS50) is a code, not a sentence.
     if (info.script !== 'Latin' && /^[A-Z0-9][A-Z0-9_-]*$/.test(String(text).trim())) return '';
     const n = letters(text);
-    if (n < T.scriptBlockMin) return '';
+    // Latin locale: even a short word in Greek/Cyrillic/Arabic letters is wrong.
+    if (n < (info.script === 'Latin' ? T.latinBlockMin : T.scriptBlockMin)) return '';
     if (info.script === 'Latin') {
       const foreign = n - count(text, 'Latin');
       return foreign / n > T.latinForeignShare ? `латиницы ${Math.round(100 * (n - foreign) / n)}%` : '';
@@ -348,8 +363,15 @@
           add(i, 'empty', 'error', `пусто, в ${ref}: «${sample(refText, 30)}»`); flagged.add(i); broken.add(i); return;
         }
         // junk & encoding — every locale, the reference included
-        const junk = junkIn(text);
+        if (UNRESOLVED_RE.test(text)) {
+          add(i, 'placeholder', 'error', 'плейсхолдер ${{ }}$ не подставлен — текст локали не подтянулся', text); flagged.add(i); broken.add(i);
+        }
+        const junk = flagged.has(i) ? '' : junkIn(text);
         if (junk) { add(i, 'placeholder', 'error', junk, text); flagged.add(i); broken.add(i); }
+        if (!isRef) {
+          const foreign = foreignBlocks(text, refInfo?.base, info?.base);
+          if (foreign.length) add(i, 'var_mismatch', 'warn', `в локали ${code} блок для ${ref}: ${foreign[0].replace(/\s+/g, '').slice(0, 60)}`);
+        }
         if (MOJIBAKE_RE.test(text)) { add(i, 'mojibake', 'error', 'сломанная кодировка', text); flagged.add(i); broken.add(i); }
         if (isRef) {
           // The reference must itself be in its language: an English locale with
