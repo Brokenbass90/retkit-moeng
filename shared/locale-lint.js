@@ -494,10 +494,16 @@
     let s = String(html || '');
     s = s.replace(/<!--[\s\S]*?-->/g, ' ')
       .replace(/<head[\s>][\s\S]*?<\/head>/gi, ' ')
-      .replace(/<(style|script|noscript|title)[\s>][\s\S]*?<\/\1>/gi, ' ');
+      .replace(/<(style|script|noscript|title)[\s>][\s\S]*?<\/\1>/gi, ' ')
+      // Hidden service blocks (ESP unsubscribe link, Gmail fix) are not read by anyone —
+      // same text in every locale on purpose. The preheader is hidden too, but it is read.
+      .replace(/<div\b(?![^>]*class="[^"]*preheader)[^>]*style="[^"]*display:\s*none[^"]*"[^>]*>[\s\S]*?<\/div>/gi, ' ')
+      .replace(/<a\b[^>]*\bdata-msys-unsubscribe\b[^>]*>[\s\S]*?<\/a>/gi, ' ');
     // alt texts are read too (images off, screen readers)
     s = s.replace(/<img\b[^>]*?\balt\s*=\s*("([^"]*)"|'([^']*)')[^>]*>/gi, (m, _q, a, b) => `\u0000${a ?? b ?? ''}\u0000`);
     s = s.replace(/<br\s*\/?>/gi, ' ');
+    // Links sit next to each other («Terms</a><a>Unsubscribe») — keep them apart.
+    s = s.replace(/<\/?a(?:\s[^>]*)?>/gi, ' ');
     s = s.replace(new RegExp(`<\\/?(?:${INLINE})(?:\\s[^>]*)?>`, 'gi'), '');
     s = s.replace(/<[^>]*>/g, '\u0000');
     return s.split('\u0000')

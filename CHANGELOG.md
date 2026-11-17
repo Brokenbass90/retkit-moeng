@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.2
+
+- Locale dots appear by themselves: once per campaign, when RetKit is idle after opening, it walks all locales and checks them (toggle “auto” in 🌐 Locales).
+- Locale check: the hidden ESP unsubscribe link (“Manage your preference here”) is no longer “untranslated” in every locale; neighbouring links are read apart.
+- Another campaign in the same tab starts with a clean locale cache.
+
 ## 0.10.1
 
 - Fix: paste → fast Cmd+Z while a sync was in flight could report “MoEngage now shows a different email — another locale?” and re-load the editor. A stale sync now remembers what it wrote.

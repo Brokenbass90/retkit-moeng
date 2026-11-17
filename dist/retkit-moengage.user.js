@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.1
+// @version      0.10.2
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1801,6 +1801,9 @@
     localeLintKey: '',
     localeLintTimer: null,
     localeLintRetryTimer: null,
+    localeLintCampaign: '',
+    localeLintAutoKey: '',
+    localeLintAutoTimer: null,
     wrap: localStorage.getItem('retkit-mo-wrap') !== 'false',
     previewMode: localStorage.getItem('retkit-mo-preview-mode') || 'desktop',
     splitPercent: Number(localStorage.getItem('retkit-mo-split') || 50),
@@ -2213,6 +2216,7 @@
       #retkit-mo-locale-lint-button.rk-lint-error { color:#ff8a92; }
       #retkit-mo-locale-lint-button.rk-lint-warn { color:#f4be63; }
       #retkit-mo-locale-lint-button.rk-lint-ok { color:#72d6a0; }
+      .rk-lint-auto { color:#9fb0c6; font-size:11px; display:flex; align-items:center; gap:3px; cursor:pointer; }
       .rk-lint-summary { color:#9fb0c6; font-size:11px; padding:6px 8px; border-bottom:1px solid #202b39; }
     `;
     document.head.appendChild(style);
@@ -3318,7 +3322,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.1</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.2</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3343,7 +3347,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.10.1',
+        version: '0.10.2',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4363,6 +4367,7 @@
       buildWorkspaceBody(workspace);
       document.body.style.overflow = 'hidden';
       status('Loaded from MoEngage', 'ok');
+      scheduleAutoLocaleLint();
     } catch (error) {
       console.error('[RetKit] workspace failed', error);
       workspace.remove();
@@ -4553,6 +4558,41 @@
     return codes.find((code) => /^EN(?:$|[_-])/i.test(code)) || codes.find((code) => /^DEFAULT$/i.test(code)) || '';
   }
 
+  // Another campaign in the same MoEngage tab (SPA): forget the previous email's locales.
+  function resetLocaleLintForCampaign() {
+    const campaign = String(location.pathname || '');
+    if (STATE.localeLintCampaign === campaign) return;
+    STATE.localeLintCampaign = campaign;
+    STATE.localeHtmlCache = {};
+    STATE.localeLint = null;
+    STATE.localeLintKey = '';
+  }
+
+  function localeAutoCheckEnabled() {
+    try { return root.localStorage?.getItem('retkit-mo-locale-autocheck') !== 'off'; } catch { return true; }
+  }
+
+  // Dots must be there without a click: once per campaign, when RetKit is idle,
+  // walk every locale (the same walk as «Check all locales») and paint the tabs.
+  function scheduleAutoLocaleLint(attempt = 0) {
+    resetLocaleLintForCampaign();
+    if (!localeAutoCheckEnabled() || STATE.localeLintAutoKey === STATE.localeLintCampaign) return;
+    clearTimeout(STATE.localeLintAutoTimer);
+    STATE.localeLintAutoTimer = setTimeout(async () => {
+      if (!document.getElementById(IDS.workspace)) return;
+      const busy = STATE.dirty || STATE.applying || STATE.pendingApply || STATE.multiLocaleBusy
+        || Date.now() < (Number(STATE.localeSwitchUntil) || 0);
+      if (busy) { if (attempt < 20) scheduleAutoLocaleLint(attempt + 1); return; }
+      STATE.localeLintAutoKey = STATE.localeLintCampaign;
+      try {
+        diagBreadcrumb('locale.lint.auto', { campaign: STATE.localeLintCampaign });
+        await lintAllLocales({ walk: true });
+      } catch (error) {
+        diagBreadcrumb('locale.lint.auto-failed', { reason: error?.message || String(error) });
+      }
+    }, attempt ? 2000 : 2500);
+  }
+
   function runLocaleLintFromCache() {
     const lint = localeLintCore();
     if (!lint) return null;
@@ -4693,7 +4733,15 @@
       catch (error) { status(`Locale check failed: ${error?.message || error}`, 'error'); }
       finally { run.disabled = false; renderLocaleLintPopover(true); }
     }, { title: 'Пройти по всем локалям MoEngage и проверить каждую' });
-    head.append(run, makeButton('×', () => pop.remove()));
+    const auto = document.createElement('label');
+    auto.className = 'rk-lint-auto';
+    auto.title = 'Проверять все локали автоматически, когда RetKit открывает письмо';
+    const autoBox = document.createElement('input');
+    autoBox.type = 'checkbox';
+    autoBox.checked = localeAutoCheckEnabled();
+    autoBox.addEventListener('change', () => { try { root.localStorage?.setItem('retkit-mo-locale-autocheck', autoBox.checked ? 'on' : 'off'); } catch {} });
+    auto.append(autoBox, document.createTextNode(' auto'));
+    head.append(auto, run, makeButton('×', () => pop.remove()));
     pop.appendChild(head);
     const result = STATE.localeLint;
     const summary = document.createElement('div');
@@ -4802,7 +4850,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.10.1 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.2 loaded');
   }
 
   boot();
@@ -5546,10 +5594,16 @@
     let s = String(html || '');
     s = s.replace(/<!--[\s\S]*?-->/g, ' ')
       .replace(/<head[\s>][\s\S]*?<\/head>/gi, ' ')
-      .replace(/<(style|script|noscript|title)[\s>][\s\S]*?<\/\1>/gi, ' ');
+      .replace(/<(style|script|noscript|title)[\s>][\s\S]*?<\/\1>/gi, ' ')
+      // Hidden service blocks (ESP unsubscribe link, Gmail fix) are not read by anyone —
+      // same text in every locale on purpose. The preheader is hidden too, but it is read.
+      .replace(/<div\b(?![^>]*class="[^"]*preheader)[^>]*style="[^"]*display:\s*none[^"]*"[^>]*>[\s\S]*?<\/div>/gi, ' ')
+      .replace(/<a\b[^>]*\bdata-msys-unsubscribe\b[^>]*>[\s\S]*?<\/a>/gi, ' ');
     // alt texts are read too (images off, screen readers)
     s = s.replace(/<img\b[^>]*?\balt\s*=\s*("([^"]*)"|'([^']*)')[^>]*>/gi, (m, _q, a, b) => `\u0000${a ?? b ?? ''}\u0000`);
     s = s.replace(/<br\s*\/?>/gi, ' ');
+    // Links sit next to each other («Terms</a><a>Unsubscribe») — keep them apart.
+    s = s.replace(/<\/?a(?:\s[^>]*)?>/gi, ' ');
     s = s.replace(new RegExp(`<\\/?(?:${INLINE})(?:\\s[^>]*)?>`, 'gi'), '');
     s = s.replace(/<[^>]*>/g, '\u0000');
     return s.split('\u0000')
@@ -7146,7 +7200,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.10.1',
+          clientVersion: '0.10.2',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -10022,7 +10076,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.10.1');
+    setTextContentIfChanged(version, 'v0.10.2');
     return true;
   }
 
@@ -13765,7 +13819,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.10.1' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.10.2' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -13791,7 +13845,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.10.1 loaded');
+    console.log('[RetKit] MoEngage bridge v0.10.2 loaded');
   }
 
   bootBridge();

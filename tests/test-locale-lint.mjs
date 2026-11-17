@@ -87,6 +87,17 @@ assert.ok(codes(r, 'fr').includes('fr#-:missing_block:error'), codes(r, 'fr').jo
   assert.ok(codes(r, 'fr').includes('fr#1:placeholder:error'), codes(r).join());
 }
 
+// 3d. Live case 16.11 (MoEngage): the hidden ESP unsubscribe link «Manage your preference here» is the
+// same in every locale on purpose — not "untranslated". The hidden preheader is still read.
+{
+  const mail = (body, pre) => `<html><body><div class="preheader" style="display: none; font-size: 1px;">${pre}</div><p>${body}</p>`
+    + `<div style="display: none; font-size: 1px;"><a data-msys-unsubscribe="1" href="{{ContentBlock['iq_unsubscribe']}}">Manage your preference here</a></div></body></html>`;
+  r = L.lintHtml({ htmlByLocale: { EN: mail('Complete the practice to get your first trade risk-free', 'Earn a five dollar bonus today'), ID: mail('Selesaikan latihan untuk mendapatkan trading pertama bebas risiko', 'Dapatkan bonus lima dolar hari ini') } });
+  assert.deepEqual(codes(r), [], JSON.stringify(r.issues));
+  r = L.lintHtml({ htmlByLocale: { EN: mail('Complete the practice to get your first trade risk-free', 'Earn a five dollar bonus today'), ID: mail('Selesaikan latihan untuk mendapatkan trading pertama bebas risiko', 'Earn a five dollar bonus today') } });
+  assert.ok(codes(r, 'ID').some((c) => c.includes('untranslated')), 'untranslated preheader is still caught');
+}
+
 // 4. Spanish text in the French locale: language.
 r = L.lint({ locales: { en, fr: es.slice() } });
 assert.ok(codes(r, 'fr').includes('fr#-:wrong_lang:error'), JSON.stringify(r.issues));

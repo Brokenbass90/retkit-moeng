@@ -20,3 +20,13 @@ console.log('✓ locale-lint wiring: dist, workspace API, tab marks, agent relay
 assert.ok(core.includes("if (result?.ok && nativeNow && htmlEquivalentForSync(nativeNow, next)) rememberNativeHtml(nativeNow);"), 'a stale sync still remembers what it wrote');
 assert.ok(core.includes('STATE.localeLintRetryTimer = setTimeout(() => rememberActiveLocaleHtml('), 'an edit during the switch window is re-checked, not dropped');
 console.log('✓ live fixes: stale sync remembers its write; locale dot follows undo');
+
+// 0.10.2: dots without a click; another campaign in the same tab starts clean.
+{
+  const core2 = fs.readFileSync(new URL('../src/core/retkit-moengage-core.user.js', import.meta.url), 'utf8');
+  assert.ok(core2.includes("status('Loaded from MoEngage', 'ok');\n      scheduleAutoLocaleLint();"), 'auto check on open');
+  assert.ok(core2.includes('STATE.localeLintAutoKey = STATE.localeLintCampaign;'), 'once per campaign');
+  assert.ok(/const busy = STATE\.dirty \|\| STATE\.applying/.test(core2), 'never while an edit is syncing');
+  assert.ok(core2.includes('STATE.localeHtmlCache = {};'), 'cache is per campaign');
+  console.log('✓ auto locale check on open, per campaign, idle only');
+}
