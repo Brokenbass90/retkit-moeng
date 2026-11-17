@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.4
+
+- Locale check: real words with four keyboard keys in a row («запрос», “property”) are no longer “gibberish” — a keyboard run now needs five keys.
+
 ## 0.10.3
 
 - Locale check catches keyboard mash and junk inside a translated text (“dfgdfg”, “zxcvb”, “фывапро”, “### ~~~ $$$”) and a few foreign letters mixed into a Latin text.

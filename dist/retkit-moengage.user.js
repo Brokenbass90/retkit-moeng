@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.3
+// @version      0.10.4
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3322,7 +3322,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.3</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.4</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3347,7 +3347,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.10.3',
+        version: '0.10.4',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4850,7 +4850,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.10.3 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.4 loaded');
   }
 
   boot();
@@ -5276,7 +5276,8 @@
   }
   // Набор букв вместо текста: «dfgdfg», «zxcvb», «фывапро» — слово без гласных
   // из 6+ букв или кусок раскладки. Только латиница и кириллица (там это видно надёжно).
-  const KEYBOARD_RE = /(?:qwer|wert|erty|asdf|sdfg|dfgh|fghj|ghjk|hjkl|zxcv|xcvb|cvbn|vbnm|йцук|цуке|укен|фыва|ывап|вапр|апро|ячсм|чсми|смит)/i;
+  // Пять клавиш подряд: четыре встречаются в живых словах («запрос» → «апро», «property» → «erty»).
+  const KEYBOARD_RE = /(?:qwert|werty|asdfg|sdfgh|dfghj|fghjk|ghjkl|zxcvb|xcvbn|cvbnm|йцуке|цукен|фывап|ывапр|вапро|ячсми|чсмит)/i;
   const VOWELS_RE = /[aeiouyаеёиоуыэюяіїєaeiouy]/i;
   function gibberishIn(text, info) {
     if (!info || !['Latin', 'Cyrillic'].includes(info.script)) return '';
@@ -5284,7 +5285,7 @@
     const own = info.script === 'Latin' ? /^\p{Script=Latin}+$/u : /^\p{Script=Cyrillic}+$/u;
     for (const w of words) {
       if (!own.test(w)) continue; // чужой алфавит — это уже wrong_script
-      if (w.length >= 4 && KEYBOARD_RE.test(w)) return `набор букв «${w}»`;
+      if (w.length >= 5 && KEYBOARD_RE.test(w)) return `набор букв «${w}»`;
       if (w.length >= 6 && !VOWELS_RE.test(w) && !/^[A-Z]+$/.test(w)) return `набор букв «${w}»`;
       if (/(\p{L})\1{3,}/u.test(w)) return `повтор букв «${w}»`;
     }
@@ -7229,7 +7230,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.10.3',
+          clientVersion: '0.10.4',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -10105,7 +10106,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.10.3');
+    setTextContentIfChanged(version, 'v0.10.4');
     return true;
   }
 
@@ -13848,7 +13849,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.10.3' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.10.4' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -13874,7 +13875,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.10.3 loaded');
+    console.log('[RetKit] MoEngage bridge v0.10.4 loaded');
   }
 
   bootBridge();

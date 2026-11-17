@@ -109,6 +109,14 @@ assert.ok(codes(r, 'fr').includes('fr#-:missing_block:error'), codes(r, 'fr').jo
   }
 }
 
+// 3f. Live case 17.11: real words that contain 4 keyboard keys in a row are not gibberish.
+{
+  const ru2 = ru.map((t, i) => (i === 1 ? 'Вы не отправляли этот запрос? Проверьте и измените пароль от своего аккаунта, пожалуйста.' : t));
+  assert.ok(!codes(L.lint({ locales: { en, ru: ru2 } }), 'ru').some((c) => c.includes('gibberish')), 'запрос is a word');
+  const en2 = en.map((t, i) => (i === 1 ? 'Your property and liberty matter: this code is only active for 5 minutes.' : t));
+  assert.ok(!codes(L.lint({ locales: { en: en2, fr: es } }), 'en').some((c) => c.includes('gibberish')), 'property / liberty are words');
+}
+
 // 4. Spanish text in the French locale: language.
 r = L.lint({ locales: { en, fr: es.slice() } });
 assert.ok(codes(r, 'fr').includes('fr#-:wrong_lang:error'), JSON.stringify(r.issues));
