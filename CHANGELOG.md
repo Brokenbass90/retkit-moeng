@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.3
+
+- Locale check catches keyboard mash and junk inside a translated text (“dfgdfg”, “zxcvb”, “фывапро”, “### ~~~ $$$”) and a few foreign letters mixed into a Latin text.
+
 ## 0.10.2
 
 - Locale dots appear by themselves: once per campaign, when RetKit is idle after opening, it walks all locales and checks them (toggle “auto” in 🌐 Locales).

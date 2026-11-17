@@ -98,6 +98,17 @@ assert.ok(codes(r, 'fr').includes('fr#-:missing_block:error'), codes(r, 'fr').jo
   assert.ok(codes(r, 'ID').some((c) => c.includes('untranslated')), 'untranslated preheader is still caught');
 }
 
+// 3e. Live case 17.11: keyboard mash inside an Italian text, junk symbols, a few Cyrillic letters.
+{
+  const it = ['Ciao, {{name}}!', 'Il tuo codice di verifica è pronto. Ricorda che questo codice è attivo solo per 5 minuti e può essere usato una sola volta.', 'embedded.brand_name', 'IQ Option', 'Se hai bisogno di aiuto o hai domande, contatta il nostro @@Team di Supporto@@ in qualsiasi momento.', 'Termini e Condizioni', 'Annulla iscrizione'];
+  r = L.lint({ locales: { en, it } });
+  assert.deepEqual(codes(r, 'it'), [], 'clean Italian passes');
+  for (const [bad, code] of [['Termini dfgdfg sdfsdf', 'gibberish'], ['asdkjfh zxcvb', 'gibberish'], ['Termini ### ~~~ $$$ e', 'gibberish'], ['Termini e Condizioni мир при', 'wrong_script']]) {
+    r = L.lint({ locales: { en, it: it.map((t, i) => (i === 5 ? bad : t)) } });
+    assert.ok(codes(r, 'it').includes(`it#5:${code}:error`), `${bad}: ${codes(r, 'it')}`);
+  }
+}
+
 // 4. Spanish text in the French locale: language.
 r = L.lint({ locales: { en, fr: es.slice() } });
 assert.ok(codes(r, 'fr').includes('fr#-:wrong_lang:error'), JSON.stringify(r.issues));
