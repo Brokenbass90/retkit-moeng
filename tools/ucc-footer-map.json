@@ -1,12 +1,19 @@
 {
-  "_comment": "Футер UCC -> MoEngage (noreg). {LANG} = суффикс языка MoEngage (EN, PT…). Для рег-писем будет отдельная карта.",
+  "_comment": "Футер UCC -> MoEngage (noreg). {LANG} = суффикс языка MoEngage (EN, PT…). Для рег-писем будет отдельная карта. Ссылка логотипа {{embedded.domain}}/traderoom/ -> как в переделанных EN/JA.",
   "replace": {
     "{{embedded.company_address}}": "{{ContentBlock['iq_company_address_text']}}",
     "{{embedded.risk_warning}}": "{{ContentBlock['iq_risk_warning_noreg_{LANG}']}}",
-    "{{embedded.company_terms_link}}": "{{ContentBlock['iq_terms_noreg_url']}}"
+    "{{embedded.company_terms_link}}": "{{ContentBlock['iq_terms_noreg_url']}}",
+    "{{embedded.domain}}/traderoom/": "https://iqbroker.co/lp/multilink/asset?aff=7&amp;afftrack=mail_system&amp;retrack=system"
   },
   "moengageLocales": {
-    "en": "en_US", "ar": "ar_KW", "es": "es_ES", "pt": "pt_PT",
-    "th": "th_TH", "id": "id_ID", "vi": "vi_VN", "fr": "fr_FR"
+    "en": "en_US",
+    "ar": "ar_KW",
+    "es": "es_ES",
+    "pt": "pt_PT",
+    "th": "th_TH",
+    "id": "id_ID",
+    "vi": "vi_VN",
+    "fr": "fr_FR"
   }
 }
