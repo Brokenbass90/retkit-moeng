@@ -354,6 +354,8 @@
   // claude → mo { type:'status' } → mo → claude { type:'status', campaign, step, locales }.
   const MAILBOX = 'http://127.0.0.1:43118/mailbox';
   const PENDING_KEY = 'retkit.mo.mailbox.pending';
+  // Своя метка вкладки: переживает перезагрузку (sessionStorage), команды import адресуются ей.
+  const MO_TAB = (() => { try { let t = root.sessionStorage.getItem('retkit.mo.tab'); if (!t) { t = Math.random().toString(36).slice(2, 8); root.sessionStorage.setItem('retkit.mo.tab', t); } return t; } catch { return Math.random().toString(36).slice(2, 8); } })();
   const campaignInUrl = () => (String(root.location?.href || '').match(/[0-9a-f]{24}/i) || [''])[0];
   async function mbPost(to, body) {
     const res = await root.fetch(`${MAILBOX}/post`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: 'mo', to, ...body }) });
@@ -392,7 +394,7 @@
     return { saved: true };
   }
   async function runImport(cmd) {
-    const report = (body) => mbPost('claude', { cmd: cmd.id, campaign: cmd.campaign, uccId: cmd.uccId, ...body }).catch(() => {});
+    const report = (body) => mbPost('claude', { cmd: cmd.id, tab: MO_TAB, campaign: cmd.campaign, uccId: cmd.uccId, ...body }).catch(() => {});
     try {
       const a = await openContentStep();
       const latest = async () => {
@@ -417,10 +419,11 @@
       if (cmd.type === 'status') {
         let locales = [];
         try { locales = (await api()?.listLocales?.() || []).map(localeKey); } catch {}
-        await mbPost('claude', { type: 'status', cmd: cmd.id, campaign: campaignInUrl(), url: String(root.location?.href || ''), retkit: Boolean(api()), locales, last }).catch(() => {});
+        await mbPost('claude', { type: 'status', cmd: cmd.id, tab: MO_TAB, campaign: campaignInUrl(), url: String(root.location?.href || ''), retkit: Boolean(api()), locales, last }).catch(() => {});
         return;
       }
       if (cmd.type !== 'import' || !cmd.campaign) return;
+      if (cmd.tab && cmd.tab !== MO_TAB) return; // команда другой вкладке MoEngage
       if (campaignInUrl() !== cmd.campaign) {
         try { root.sessionStorage.setItem(PENDING_KEY, JSON.stringify(cmd)); } catch {}
         root.location.assign(`/v4/email/create/event-trigger/${cmd.campaign}`);
