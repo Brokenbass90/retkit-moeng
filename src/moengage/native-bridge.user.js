@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.11.5
+// @version      0.11.6
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @require      https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/src/retkit-moengage.user.js
@@ -1105,7 +1105,7 @@
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.11.5');
+    setTextContentIfChanged(version, 'v0.11.6');
     return true;
   }
 
@@ -4471,12 +4471,6 @@
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
       refreshOriginalButton(true);
     }
-    if (!document.getElementById(IDS.uccButton) && root.__RetKitUccImport) {
-      // Перенос из UCC (мост — скрипт RetKit UCC Export). Зелёная точка — UCC с письмом на связи.
-      const button = makeToolbarButton(IDS.uccButton, '⇄ UCC', () => root.__RetKitUccImport.open(), 'Transfer the email open in UCC into this MoEngage email');
-      bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
-      root.__RetKitUccImport.bindButton(button);
-    }
     if (!document.getElementById(IDS.testButton)) {
       const button = makeToolbarButton(IDS.testButton, 'Send test', handOffNativeTestCampaign, 'Open the native MoEngage Test Campaign form');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
@@ -4854,7 +4848,7 @@
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.11.5' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.11.6' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -4880,7 +4874,7 @@
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.11.5 loaded');
+    console.log('[RetKit] MoEngage bridge v0.11.6 loaded');
   }
 
   bootBridge();

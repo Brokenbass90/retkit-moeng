@@ -59,14 +59,17 @@
     };
   }
 
-  /** Открыть вкладку локали и убедиться, что открыта именно она. */
+  /** Открыть вкладку локали и убедиться, что открыта именно она (по реальной вкладке, не по ответу switch). */
   async function openLocale(a, mo) {
     const want = localeKey(mo);
-    const ok = await a.switchLocale(mo);
-    await wait(150);
-    let now = '';
-    try { now = localeKey(a.getNativeTabLocale?.() || a.getActiveLocale?.() || ''); } catch {}
-    if (!ok || (now && now !== want)) throw new Error(`не открылась вкладка ${mo}${now ? ` (открыта ${now})` : ''} — не пишу`);
+    const current = () => { try { return localeKey(a.getNativeTabLocale?.() || a.getActiveLocale?.() || ''); } catch { return ''; } };
+    if (current() === want) return;
+    let ok = false;
+    try { ok = await a.switchLocale(mo); } catch {}
+    for (let i = 0; i < 10 && current() !== want; i += 1) await wait(200);
+    const now = current();
+    if (now === want || (!now && ok)) return;
+    throw new Error(`не открылась вкладка ${mo}${now ? ` (открыта ${now})` : ''} — не пишу`);
   }
 
   let running = false;
@@ -257,12 +260,12 @@
       c.title = miss ? 'Такой локали нет в этом письме MoEngage — не переносится' : 'HTML и Subject будут заменены';
       chipBy.set(l.mo, c); chips.append(c);
     }
-    for (const sk of pl.skipped) { const c = h('span', 'u-chip skip', sk); c.title = 'Такой локали нет в MoEngage вообще'; chips.append(c); }
-    if (pl.missing.length) body.append(h('div', 'u-warn', `Пунктир — нет в этом письме: ${pl.missing.join(', ')}. Локали создаёт Claude при создании письма.`));
-    if (pl.skipped.length) body.append(h('div', 'u-note', 'Зачёркнутые — нет в MoEngage, попросить завести.'));
+    const notes = [];
+    if (pl.missing.length) notes.push(`пунктир — нет в этом письме MoEngage`);
+    if (pl.skipped.length) notes.push(`ещё ${pl.skipped.length} лок. UCC нет в MoEngage (${pl.skipped.join(', ')})`);
+    if (notes.length) body.append(h('div', 'u-note', notes.join(' · ')));
     if (pl.empty.length) body.append(h('div', 'u-warn', `Пустые в UCC: ${pl.empty.join(', ')}`));
     if (pl.footerLeftovers.length) body.append(h('div', 'u-err', `Футер не заменён: ${pl.footerLeftovers.join(', ')}`));
-    if (pl.placeholders.length) body.append(h('div', 'u-note', `Остаются как есть: ${pl.placeholders.join(' ')}`));
     const out = h('div'); body.append(out);
     const run = async () => {
       go.disabled = true; go.textContent = 'Переношу…';
@@ -275,9 +278,8 @@
             const c = chipBy.get(mo); if (c) { c.className = `u-chip ${st}`; if (title) c.title = title; }
             if (st === 'ok' || st === 'fail') { done += 1; reportPush(pushed, { state: 'running', done, total: transfer.locales.length, last: `${mo}: ${st === 'ok' ? '✓' : `✕ ${title || ''}`}` }); }
           },
-          onLine: (text, kind) => { if (kind === 'error') out.append(h('div', 'u-err', text)); },
         });
-        out.append(h('div', res.failed ? 'u-warn' : 'u-ok', res.failed ? `Перенесено ${res.written} из ${res.results.length}. Красные — наведите, там причина.` : `Готово: ${res.written} лок. Проверьте и сохраните кампанию.`));
+        out.append(h('div', res.failed ? 'u-warn' : 'u-ok', res.failed ? `Перенесено ${res.written} из ${res.results.length}. Наведите на красную локаль — там причина.` : `Готово: ${res.written} лок. Проверьте и сохраните кампанию.`));
         reportPush(pushed, { state: 'done', ok: res.written, failed: res.failed, lines: res.lines });
         go.textContent = 'Закрыть'; go.disabled = false; go.onclick = closePop;
       } catch (error) {

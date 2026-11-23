@@ -155,6 +155,12 @@ const guard = await imp.agent({ apply: true, id: 15928 });
 assert.ok(guard.results.some((r) => r.locale === 'pt_PT' && !r.ok && /не открылась вкладка/.test(r.reason)));
 bridgeApi.switchLocale = async (l) => { active = /^default$/i.test(l) ? 'EN' : l.toUpperCase(); return true; };
 
+// MoEngage переключил вкладку, но switch вернул false (как в живом пилоте 23.11) → пишем, вкладка верная
+bridgeApi.switchLocale = async (l) => { active = /^default$/i.test(l) ? 'EN' : l.toUpperCase(); return false; };
+const falsy = await imp.agent({ apply: true, id: 15928 });
+assert.equal(falsy.ok, true, falsy.lines.join('\n'));
+bridgeApi.switchLocale = async (l) => { active = /^default$/i.test(l) ? 'EN' : l.toUpperCase(); return true; };
+
 // 4. Ошибка одной локали не останавливает остальные
 bridgeApi.setLocaleHtmlStable = async () => (active === 'PT_PT' ? { ok: false, reason: 'MoEngage did not keep the HTML' } : { ok: true });
 const partial = await imp.agent({ apply: true, id: 15928 });

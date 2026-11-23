@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.11.5
+// @version      0.11.6
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3324,7 +3324,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.5</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.6</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3349,7 +3349,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.11.5',
+        version: '0.11.6',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4930,7 +4930,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.11.5 loaded');
+    console.log('[RetKit] MoEngage workspace v0.11.6 loaded');
   }
 
   boot();
@@ -7327,7 +7327,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.11.5',
+          clientVersion: '0.11.6',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -7765,14 +7765,17 @@ module.exports = { isRtlLocale, applyRtl };
     };
   }
 
-  /** Открыть вкладку локали и убедиться, что открыта именно она. */
+  /** Открыть вкладку локали и убедиться, что открыта именно она (по реальной вкладке, не по ответу switch). */
   async function openLocale(a, mo) {
     const want = localeKey(mo);
-    const ok = await a.switchLocale(mo);
-    await wait(150);
-    let now = '';
-    try { now = localeKey(a.getNativeTabLocale?.() || a.getActiveLocale?.() || ''); } catch {}
-    if (!ok || (now && now !== want)) throw new Error(`не открылась вкладка ${mo}${now ? ` (открыта ${now})` : ''} — не пишу`);
+    const current = () => { try { return localeKey(a.getNativeTabLocale?.() || a.getActiveLocale?.() || ''); } catch { return ''; } };
+    if (current() === want) return;
+    let ok = false;
+    try { ok = await a.switchLocale(mo); } catch {}
+    for (let i = 0; i < 10 && current() !== want; i += 1) await wait(200);
+    const now = current();
+    if (now === want || (!now && ok)) return;
+    throw new Error(`не открылась вкладка ${mo}${now ? ` (открыта ${now})` : ''} — не пишу`);
   }
 
   let running = false;
@@ -7963,12 +7966,12 @@ module.exports = { isRtlLocale, applyRtl };
       c.title = miss ? 'Такой локали нет в этом письме MoEngage — не переносится' : 'HTML и Subject будут заменены';
       chipBy.set(l.mo, c); chips.append(c);
     }
-    for (const sk of pl.skipped) { const c = h('span', 'u-chip skip', sk); c.title = 'Такой локали нет в MoEngage вообще'; chips.append(c); }
-    if (pl.missing.length) body.append(h('div', 'u-warn', `Пунктир — нет в этом письме: ${pl.missing.join(', ')}. Локали создаёт Claude при создании письма.`));
-    if (pl.skipped.length) body.append(h('div', 'u-note', 'Зачёркнутые — нет в MoEngage, попросить завести.'));
+    const notes = [];
+    if (pl.missing.length) notes.push(`пунктир — нет в этом письме MoEngage`);
+    if (pl.skipped.length) notes.push(`ещё ${pl.skipped.length} лок. UCC нет в MoEngage (${pl.skipped.join(', ')})`);
+    if (notes.length) body.append(h('div', 'u-note', notes.join(' · ')));
     if (pl.empty.length) body.append(h('div', 'u-warn', `Пустые в UCC: ${pl.empty.join(', ')}`));
     if (pl.footerLeftovers.length) body.append(h('div', 'u-err', `Футер не заменён: ${pl.footerLeftovers.join(', ')}`));
-    if (pl.placeholders.length) body.append(h('div', 'u-note', `Остаются как есть: ${pl.placeholders.join(' ')}`));
     const out = h('div'); body.append(out);
     const run = async () => {
       go.disabled = true; go.textContent = 'Переношу…';
@@ -7981,9 +7984,8 @@ module.exports = { isRtlLocale, applyRtl };
             const c = chipBy.get(mo); if (c) { c.className = `u-chip ${st}`; if (title) c.title = title; }
             if (st === 'ok' || st === 'fail') { done += 1; reportPush(pushed, { state: 'running', done, total: transfer.locales.length, last: `${mo}: ${st === 'ok' ? '✓' : `✕ ${title || ''}`}` }); }
           },
-          onLine: (text, kind) => { if (kind === 'error') out.append(h('div', 'u-err', text)); },
         });
-        out.append(h('div', res.failed ? 'u-warn' : 'u-ok', res.failed ? `Перенесено ${res.written} из ${res.results.length}. Красные — наведите, там причина.` : `Готово: ${res.written} лок. Проверьте и сохраните кампанию.`));
+        out.append(h('div', res.failed ? 'u-warn' : 'u-ok', res.failed ? `Перенесено ${res.written} из ${res.results.length}. Наведите на красную локаль — там причина.` : `Готово: ${res.written} лок. Проверьте и сохраните кампанию.`));
         reportPush(pushed, { state: 'done', ok: res.written, failed: res.failed, lines: res.lines });
         go.textContent = 'Закрыть'; go.disabled = false; go.onclick = closePop;
       } catch (error) {
@@ -10587,7 +10589,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.11.5');
+    setTextContentIfChanged(version, 'v0.11.6');
     return true;
   }
 
@@ -13953,12 +13955,6 @@ module.exports = { isRtlLocale, applyRtl };
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
       refreshOriginalButton(true);
     }
-    if (!document.getElementById(IDS.uccButton) && root.__RetKitUccImport) {
-      // Перенос из UCC (мост — скрипт RetKit UCC Export). Зелёная точка — UCC с письмом на связи.
-      const button = makeToolbarButton(IDS.uccButton, '⇄ UCC', () => root.__RetKitUccImport.open(), 'Transfer the email open in UCC into this MoEngage email');
-      bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
-      root.__RetKitUccImport.bindButton(button);
-    }
     if (!document.getElementById(IDS.testButton)) {
       const button = makeToolbarButton(IDS.testButton, 'Send test', handOffNativeTestCampaign, 'Open the native MoEngage Test Campaign form');
       bar.insertBefore(button, statusEl || bar.querySelector('.rk-spacer'));
@@ -14336,7 +14332,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.11.5' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.11.6' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -14362,7 +14358,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.11.5 loaded');
+    console.log('[RetKit] MoEngage bridge v0.11.6 loaded');
   }
 
   bootBridge();
