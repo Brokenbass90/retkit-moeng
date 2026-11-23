@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.7.0
+// @version      0.8.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -14,6 +14,7 @@
 // @grant        GM_listValues
 // @grant        GM_deleteValue
 // @grant        unsafeWindow
+// @connect      127.0.0.1
 // @sandbox      JavaScript
 // @run-at       document-idle
 // ==/UserScript==
@@ -478,7 +479,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.7.0',
+      version: '0.8.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -504,11 +505,78 @@
     try { W.dispatchEvent(new W.CustomEvent('retkit:ucc-link-ready')); } catch {}
   }
 
-  W.__retkitUccExport = { collect, filesFor, makeZip, exportZip, transferFor, applyFooter, MAP };
+  // ─── Конвейер: команды из почтового ящика RetKit bridge (127.0.0.1:43118) ──
+  // claude → ucc { type:'open', uccId }: открыть письмо (переход по адресу), затем
+  //   ucc → mo     { type:'transfer', uccId, host, transfer }  — код для заливки,
+  //   ucc → claude { type:'summary', uccId, ... }               — короткая сводка без HTML.
+  // В UCC — только GET. Если bridge не запущен, цикл тихо ждёт.
+  const MAILBOX = 'http://127.0.0.1:43118/mailbox';
+  const PENDING_KEY = 'retkit.ucc.mailbox.pending';
+  async function mbPost(to, body) {
+    const res = await (W.fetch || fetch)(`${MAILBOX}/post`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: 'ucc', to, ...body }) });
+    if (!res.ok) throw new Error(`mailbox HTTP ${res.status}`);
+    return res.json();
+  }
+  function summaryOf(t) {
+    return {
+      uccId: t.id, host: t.host, name: t.name, microservice: t.microservice, sender: t.sender, senderEmail: t.senderEmail, senderName: t.senderName,
+      locales: t.locales.map((l) => ({ ucc: l.ucc, mo: l.mo, subject: l.subject, bytes: l.html.length })),
+      skipped: t.skipped, empty: t.empty, placeholders: Object.keys(t.placeholders || {}), footerLeftovers: t.footerLeftovers,
+    };
+  }
+  async function exportFor(cmd) {
+    try {
+      const mail = await collect(cmd.uccId);
+      const transfer = transferFor(mail);
+      await mbPost('mo', { type: 'transfer', uccId: String(transfer.id), host: transfer.host, transfer });
+      await mbPost('claude', { type: 'summary', cmd: cmd.id, ...summaryOf(transfer) });
+    } catch (error) {
+      try { await mbPost('claude', { type: 'error', cmd: cmd.id, uccId: cmd.uccId, error: error?.message || String(error) }); } catch {}
+    }
+  }
+  function uccMailbox() {
+    let after = 0;
+    let started = false;
+    async function handle(cmd) {
+      if (cmd.type !== 'open' || !cmd.uccId) return;
+      if (String(templateId()) !== String(cmd.uccId)) {
+        try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(cmd)); } catch {}
+        location.assign(`/email-templates/${cmd.uccId}/edit`);
+        return;
+      }
+      await exportFor(cmd);
+    }
+    async function loop() {
+      for (;;) {
+        try {
+          const url = `${MAILBOX}/poll?to=ucc&after=${after}&wait=${started ? 25000 : 0}`;
+          const res = await (W.fetch || fetch)(url);
+          const data = await res.json();
+          if (!started) { after = data.lastId || 0; started = true; continue; } // старые команды не выполняем
+          for (const m of data.messages || []) { after = Math.max(after, m.id); await handle(m); }
+        } catch {
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+      }
+    }
+    // Команда пришла до перехода на нужное письмо — выполнить после загрузки.
+    try {
+      const pending = JSON.parse(sessionStorage.getItem(PENDING_KEY) || 'null');
+      if (pending) {
+        sessionStorage.removeItem(PENDING_KEY);
+        const wait = () => (String(templateId()) === String(pending.uccId) ? exportFor(pending) : setTimeout(wait, 500));
+        setTimeout(wait, 1500);
+      }
+    } catch {}
+    loop();
+  }
+
+  W.__retkitUccExport = { collect, filesFor, makeZip, exportZip, transferFor, applyFooter, summaryOf, MAP };
   if (IS_UCC) {
     sync();
     setInterval(sync, 1000); // UCC — одностраничное приложение, адрес меняется без перезагрузки
     uccLink();
+    if (typeof sessionStorage !== "undefined") uccMailbox(); // в тестах (vm) ящика нет
   } else if (/moengage\.com$/.test(location.host)) {
     moengageLink();
   }

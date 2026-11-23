@@ -346,6 +346,107 @@
   if (typeof setInterval === 'function') setInterval(tickUi, 2000); else root.setInterval?.(tickUi, 2000);
   try { root.addEventListener?.('retkit:ucc-link-ready', start); } catch {}
 
+  // ─── Конвейер: команды из почтового ящика RetKit bridge (127.0.0.1:43118) ──
+  // claude → mo { type:'import', campaign, uccId, save }:
+  //   открыть кампанию (если открыта другая) → шаг Content → взять код из ящика
+  //   (ucc → mo 'transfer' с этим uccId) → залить локали → «Save as draft» (save:true)
+  //   → mo → claude { type:'result', ... } с итогом по локалям.
+  // claude → mo { type:'status' } → mo → claude { type:'status', campaign, step, locales }.
+  const MAILBOX = 'http://127.0.0.1:43118/mailbox';
+  const PENDING_KEY = 'retkit.mo.mailbox.pending';
+  const campaignInUrl = () => (String(root.location?.href || '').match(/[0-9a-f]{24}/i) || [''])[0];
+  async function mbPost(to, body) {
+    const res = await root.fetch(`${MAILBOX}/post`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: 'mo', to, ...body }) });
+    if (!res.ok) throw new Error(`mailbox HTTP ${res.status}`);
+    return res.json();
+  }
+  const textOf = (el) => String(el?.textContent || '').replace(/\s+/g, ' ').trim();
+  function clickByText(re, scope = root.document) {
+    const all = [...scope.querySelectorAll('button,[role="button"],a,li,div,span')].filter((el) => re.test(textOf(el)) && el.offsetParent !== null);
+    // самый «внутренний» подходящий элемент, затем ближайший кликабельный предок
+    const leaf = all.find((el) => ![...el.children].some((c) => re.test(textOf(c))));
+    const target = leaf?.closest('button,[role="button"],a,[class*="step" i],li') || leaf;
+    if (!target) return false;
+    target.click();
+    return true;
+  }
+  async function waitFor(fn, ms, step = 500) {
+    const end = Date.now() + ms;
+    for (;;) { try { const v = await fn(); if (v) return v; } catch {} if (Date.now() > end) return null; await wait(step); }
+  }
+  async function openContentStep() {
+    const a = await waitFor(() => api(), 30000);
+    if (!a) throw new Error('RetKit for MoEngage не загрузился на странице');
+    const hasLocales = async () => { try { return (await a.listLocales()).length > 0; } catch { return false; } };
+    if (await hasLocales()) return a;
+    // Степпер: «2 Content»; если не кликается — «Next» с первого шага.
+    if (!clickByText(/^(2\s*)?Content$/i)) clickByText(/^Next$/i);
+    if (await waitFor(hasLocales, 30000)) return a;
+    clickByText(/^Next$/i);
+    if (await waitFor(hasLocales, 30000)) return a;
+    throw new Error('Не открылся шаг Content (вкладки локалей не появились)');
+  }
+  async function saveDraft() {
+    if (!clickByText(/^Save as draft$/i)) return { saved: false, reason: 'кнопка «Save as draft» не найдена' };
+    await wait(3000);
+    return { saved: true };
+  }
+  async function runImport(cmd) {
+    const report = (body) => mbPost('claude', { cmd: cmd.id, campaign: cmd.campaign, uccId: cmd.uccId, ...body }).catch(() => {});
+    try {
+      const a = await openContentStep();
+      const latest = async () => {
+        const r = await root.fetch(`${MAILBOX}/latest?to=mo&type=transfer&uccId=${encodeURIComponent(cmd.uccId)}`).then((x) => x.json());
+        return r?.message?.transfer || null;
+      };
+      const transfer = await waitFor(latest, 90000, 1500);
+      if (!transfer) throw new Error(`Код письма UCC ${cmd.uccId} не пришёл в ящик (нужна вкладка UCC со скриптом)`);
+      const res = await apply(transfer, { onLocale: (mo, st) => { if (st === 'run') log(`конвейер: ${mo}…`); } });
+      const save = cmd.save ? await saveDraft() : { saved: false, reason: 'save не запрошен' };
+      let locales = [];
+      try { locales = (await a.listLocales()).map(localeKey); } catch {}
+      await report({ type: 'result', ok: res.ok, written: res.written, failed: res.failed, results: res.results, skipped: res.skipped, locales, ...save });
+    } catch (error) {
+      await report({ type: 'error', error: error?.message || String(error), last });
+    }
+  }
+  function moMailbox() {
+    let after = 0;
+    let started = false;
+    async function handle(cmd) {
+      if (cmd.type === 'status') {
+        let locales = [];
+        try { locales = (await api()?.listLocales?.() || []).map(localeKey); } catch {}
+        await mbPost('claude', { type: 'status', cmd: cmd.id, campaign: campaignInUrl(), url: String(root.location?.href || ''), retkit: Boolean(api()), locales, last }).catch(() => {});
+        return;
+      }
+      if (cmd.type !== 'import' || !cmd.campaign) return;
+      if (campaignInUrl() !== cmd.campaign) {
+        try { root.sessionStorage.setItem(PENDING_KEY, JSON.stringify(cmd)); } catch {}
+        root.location.assign(`/v4/email/create/event-trigger/${cmd.campaign}`);
+        return;
+      }
+      await runImport(cmd);
+    }
+    async function loop() {
+      for (;;) {
+        try {
+          const data = await root.fetch(`${MAILBOX}/poll?to=mo&after=${after}&wait=${started ? 25000 : 0}`).then((r) => r.json());
+          if (!started) { after = data.lastId || 0; started = true; continue; }
+          for (const m of data.messages || []) { after = Math.max(after, m.id); if (m.from === 'claude') await handle(m); }
+        } catch {
+          await wait(5000);
+        }
+      }
+    }
+    try {
+      const pending = JSON.parse(root.sessionStorage.getItem(PENDING_KEY) || 'null');
+      if (pending) { root.sessionStorage.removeItem(PENDING_KEY); setTimeout(() => runImport(pending), 3000); }
+    } catch {}
+    loop();
+  }
+  if (typeof root.sessionStorage !== 'undefined' && typeof root.fetch === 'function' && /moengage\.com$/.test(String(root.location?.host || ''))) moMailbox();
+
   root.__RetKitUccImport = {
     status, plan, apply, open, bindButton, localeKey,
     last: () => last,

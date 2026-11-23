@@ -9,6 +9,7 @@ import { AttachmentStore, MAX_ATTACHMENT_BYTES } from './attachments.mjs';
 import { RETKIT_TOOL_NAMES } from './tools/retkit-tools.mjs';
 import { renderEmailPng } from './screenshot.mjs';
 import { normalizeProviderStatus } from './providers/provider.mjs';
+import { createMailbox, isMailboxOrigin } from './mailbox.mjs';
 
 const TOOL_NAMES = new Set(RETKIT_TOOL_NAMES);
 
@@ -47,6 +48,7 @@ function formatPrompt(text, context, mode = 'suggest') {
 
 export function createBridgeServer(options = {}) {
   const host = assertLoopbackHost(options.host || '127.0.0.1');
+  const mailbox = options.mailbox || createMailbox();
   const port = Number.isInteger(options.port) ? options.port : 43118;
   const registry = options.providerRegistry || createProviderRegistry({
     detectProviders: options.detectProviders,
@@ -304,10 +306,64 @@ export function createBridgeServer(options = {}) {
     send(ws, errorEvent('NOT_READY', `Bridge handler not ready for ${message.type}`, message.type));
   }
 
+  // ─── Почтовый ящик конвейера UCC → MoEngage (см. mailbox.mjs) ─────────────
+  // Только браузерные страницы MoEngage и UCC (Origin обязателен), только loopback.
+  function mailboxJson(res, status, value, origin) {
+    const body = JSON.stringify(value);
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': origin,
+      'Vary': 'Origin',
+    });
+    res.end(body);
+  }
+  function handleMailbox(req, res, origin) {
+    if (!isMailboxOrigin(origin)) { json(res, 403, { ok: false, message: 'Origin denied' }); return; }
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Private-Network': 'true',
+        'Access-Control-Max-Age': '600',
+        'Vary': 'Origin',
+      });
+      res.end();
+      return;
+    }
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    const q = Object.fromEntries(url.searchParams);
+    if (req.method === 'POST' && url.pathname === '/mailbox/post') {
+      readJson(req, 8 * 1024 * 1024).then((body) => {
+        const { from, to, ...rest } = body || {};
+        mailboxJson(res, 201, { ok: true, message: mailbox.post(from, to, rest) }, origin);
+      }).catch((error) => mailboxJson(res, 400, { ok: false, message: error?.message || String(error) }, origin));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/mailbox/poll') {
+      mailbox.poll({ to: q.to, after: Number(q.after || 0), waitMs: Number(q.wait || 0) })
+        .then((messages) => mailboxJson(res, 200, { ok: true, lastId: mailbox.lastId(), messages }, origin));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/mailbox/latest') {
+      const { to, type, ...match } = q;
+      mailboxJson(res, 200, { ok: true, message: mailbox.latest({ to, type, match }) }, origin);
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/mailbox/list') {
+      mailboxJson(res, 200, { ok: true, lastId: mailbox.lastId(), messages: mailbox.list({ to: q.to, after: Number(q.after || 0), type: q.type, limit: Number(q.limit || 50) }) }, origin);
+      return;
+    }
+    mailboxJson(res, 404, { ok: false, message: 'Not found' }, origin);
+  }
+
   function start() {
     if (server) return Promise.resolve(server.address());
     server = http.createServer((req, res) => {
       const origin = req.headers.origin;
+      if (String(req.url || '').startsWith('/mailbox')) { handleMailbox(req, res, origin); return; }
       if (!isAllowedOrigin(origin)) { json(res, 403, { ok: false, message: 'Origin denied' }); return; }
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -381,6 +437,7 @@ export function createBridgeServer(options = {}) {
   }
 
   async function stop() {
+    mailbox.close();
     for (const session of sessions.values()) {
       for (const pending of session.pendingBrowserTools.values()) { clearTimeout(pending.timer); pending.resolve({ ok: false, error: { code: 'BRIDGE_STOPPED', message: 'RetKit bridge stopped' } }); }
     }
@@ -394,5 +451,5 @@ export function createBridgeServer(options = {}) {
     await new Promise((resolve) => current.close(() => resolve()));
   }
 
-  return { start, stop, sessions, registry, attachments, forwardToolToBrowser, get server() { return server; } };
+  return { start, stop, sessions, registry, attachments, mailbox, forwardToolToBrowser, get server() { return server; } };
 }
