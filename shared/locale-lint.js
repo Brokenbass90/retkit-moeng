@@ -138,6 +138,8 @@
       .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
       .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, ' ')
       .replace(/\b[a-z_]+(?:\.[a-z_]+)+\b/gi, ' ') // embedded.brand_name
+      // Промокоды и коды (SECURE5, BONUS100, A1B2C3) одинаковы во всех языках.
+      .replace(/\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{4,}\b/g, ' ')
       .replace(/@@/g, ' ');
     if (keepRe) s = s.replace(keepRe, ' ');
     return s.replace(/\s+/g, ' ').trim();

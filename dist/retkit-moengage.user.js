@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.4
+// @version      0.10.5
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3322,7 +3322,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.4</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.5</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3347,7 +3347,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.10.4',
+        version: '0.10.5',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4850,7 +4850,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.10.4 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.5 loaded');
   }
 
   boot();
@@ -5238,6 +5238,8 @@
       .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
       .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, ' ')
       .replace(/\b[a-z_]+(?:\.[a-z_]+)+\b/gi, ' ') // embedded.brand_name
+      // Промокоды и коды (SECURE5, BONUS100, A1B2C3) одинаковы во всех языках.
+      .replace(/\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{4,}\b/g, ' ')
       .replace(/@@/g, ' ');
     if (keepRe) s = s.replace(keepRe, ' ');
     return s.replace(/\s+/g, ' ').trim();
@@ -7230,7 +7232,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.10.4',
+          clientVersion: '0.10.5',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -10106,7 +10108,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.10.4');
+    setTextContentIfChanged(version, 'v0.10.5');
     return true;
   }
 
@@ -13849,7 +13851,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.10.4' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.10.5' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -13875,7 +13877,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.10.4 loaded');
+    console.log('[RetKit] MoEngage bridge v0.10.5 loaded');
   }
 
   bootBridge();

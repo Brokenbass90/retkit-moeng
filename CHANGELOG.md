@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5
+
+- Locale check: promo codes and codes with digits (SECURE5, BONUS100) are the same in every language — “Promocode: SECURE5” is no longer “untranslated” in every locale.
+
 ## 0.10.4
 
 - Locale check: real words with four keyboard keys in a row («запрос», “property”) are no longer “gibberish” — a keyboard run now needs five keys.

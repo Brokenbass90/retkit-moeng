@@ -117,6 +117,13 @@ assert.ok(codes(r, 'fr').includes('fr#-:missing_block:error'), codes(r, 'fr').jo
   assert.ok(!codes(L.lint({ locales: { en: en2, fr: es } }), 'en').some((c) => c.includes('gibberish')), 'property / liberty are words');
 }
 
+// 3g. Live case 23.11: «Promocode: SECURE5» is the same in every locale — a code, not an untranslated sentence.
+{
+  const page = (t) => `<html><body><p>${t}</p><p>Promocode: SECURE5</p></body></html>`;
+  r = L.lintHtml({ htmlByLocale: { EN: page('You are ready to enter the real market now'), ID: page('Anda sudah siap terjun ke pasar sebenarnya') } });
+  assert.deepEqual(codes(r, 'ID'), [], JSON.stringify(r.issues));
+}
+
 // 4. Spanish text in the French locale: language.
 r = L.lint({ locales: { en, fr: es.slice() } });
 assert.ok(codes(r, 'fr').includes('fr#-:wrong_lang:error'), JSON.stringify(r.issues));
