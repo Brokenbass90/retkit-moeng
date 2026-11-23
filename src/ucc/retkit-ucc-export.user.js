@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.5.0
+// @version      0.6.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -298,6 +298,10 @@
   const TAB = Math.random().toString(36).slice(2, 10);
   const PRESENCE_PREFIX = 'retkit.ucc.presence.';
   const MO_PREFIX = 'retkit.mo.presence.';
+  // Фоновую вкладку браузер «усыпляет»: таймеры срабатывают раз в минуту. Поэтому вкладка считается
+  // на связи 3 минуты после последнего сигнала; закрытая удаляет себя сама (pagehide), мусор чистится через 10 мин.
+  const ALIVE_MS = 3 * 60 * 1000;
+  const STALE_MS = 10 * 60 * 1000;
   const now = () => Date.now();
 
   function uccLink() {
@@ -329,6 +333,7 @@
     });
     heartbeat();
     setInterval(heartbeat, 2000);
+    try { document.addEventListener('visibilitychange', heartbeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(PRESENCE_PREFIX + TAB)); } catch {}
 
     // Индикатор моста: к какой вкладке MoEngage натянут. Перенос запускается в RetKit (MoEngage).
@@ -339,8 +344,8 @@
         if (!String(k).startsWith(MO_PREFIX)) continue;
         const p = gm.get(k, null);
         const age = p ? now() - (p.ts || 0) : Infinity;
-        if (age > 60000) { gm.del(k); continue; }
-        if (age < 6000 && p.editor) list.push(p);
+        if (age > STALE_MS) { gm.del(k); continue; }
+        if (age < ALIVE_MS && p.editor) list.push(p);
       }
       return list;
     }
@@ -360,7 +365,7 @@
       }
       const tabs = moTabs();
       const dot = tabs.length ? '#22c55e' : '#64748b';
-      const text = !tabs.length ? 'MoEngage: письмо не открыто' : (tabs.length === 1 ? `MoEngage: ${tabs[0].title || 'письмо'}` : `MoEngage: ${tabs.length} письма`);
+      const text = !tabs.length ? 'MoEngage: откройте письмо и RetKit' : `на связи с MoEngage${tabs.length > 1 ? ` (${tabs.length} вкладки)` : ''} — перенос: RetKit → «Перенести из UCC»`;
       pill.innerHTML = '';
       const d = document.createElement('span');
       Object.assign(d.style, { width: '8px', height: '8px', borderRadius: '50%', background: dot, flex: '0 0 8px' });
@@ -384,8 +389,8 @@
         if (!String(k).startsWith(PRESENCE_PREFIX)) continue;
         const p = gm.get(k, null);
         const ageMs = p ? now() - (p.ts || 0) : Infinity;
-        if (ageMs > 60000) { gm.del(k); continue; } // вкладку закрыли без pagehide
-        if (ageMs < 6000 && p.id) list.push({ id: p.id, name: p.name || '', microservice: p.microservice || '', locales: p.locales || 0, host: p.host || '', tab: p.tab, ageMs });
+        if (ageMs > STALE_MS) { gm.del(k); continue; } // вкладку закрыли без pagehide
+        if (ageMs < ALIVE_MS && p.id) list.push({ id: p.id, name: p.name || '', microservice: p.microservice || '', locales: p.locales || 0, host: p.host || '', tab: p.tab, ageMs });
       }
       // одно письмо в двух вкладках — одна строка
       const seen = new Set();
@@ -414,9 +419,10 @@
     }
     moBeat();
     setInterval(moBeat, 2000);
+    try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.5.0',
+      version: '0.6.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */

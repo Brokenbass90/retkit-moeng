@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.11.2
+// @version      0.11.3
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3324,7 +3324,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.2</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.3</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3349,7 +3349,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.11.2',
+        version: '0.11.3',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4930,7 +4930,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.11.2 loaded');
+    console.log('[RetKit] MoEngage workspace v0.11.3 loaded');
   }
 
   boot();
@@ -7327,7 +7327,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.11.2',
+          clientVersion: '0.11.3',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -7910,9 +7910,9 @@ module.exports = { isRtlLocale, applyRtl };
     if (existing) { if (!running) closePop(); return; }
     injectStyle();
     const pop = h('div'); pop.id = POP_ID;
+    pop.style.right = '16px';
     const r = boundButton?.getBoundingClientRect?.();
     pop.style.top = `${Math.round((r?.bottom || 60) + 8)}px`;
-    pop.style.left = `${Math.max(8, Math.round((r?.left || 200) - 120))}px`;
     root.document.body.appendChild(pop);
     await render(pop);
   }
@@ -8004,18 +8004,42 @@ module.exports = { isRtlLocale, applyRtl };
     }, { once: true });
   }
 
-  // Чип в панели RetKit: точка + с каким письмом связан мост.
+  // Кнопка в панели RetKit + полоса под панелью: видно, с каким письмом UCC связь и куда нажать.
+  const BANNER_ID = 'retkit-mo-ucc-banner';
   function paint() {
     const b = boundButton;
     if (!b || !b.isConnected) return;
     const s = status();
-    const color = !s.linkInstalled || !s.tabs.length ? '#64748b' : '#22c55e';
+    const ready = s.linkInstalled && s.tabs.length > 0;
     const pick = s.tabs.find((t) => selected && String(t.id) === String(selected.id) && t.host === selected.host) || s.tabs[0];
-    const text = !s.linkInstalled ? 'UCC — нет моста' : (!s.tabs.length ? 'UCC — нет письма' : (s.tabs.length > 1 ? `UCC · ${s.tabs.length} письма` : `UCC · ${pick.name || pick.id}`));
     b.textContent = '';
-    const dot = h('span', 'rk-ucc-dot'); dot.style.background = color;
-    b.append(dot, root.document.createTextNode(text.length > 28 ? `${text.slice(0, 27)}…` : text));
-    b.title = s.tabs.length ? `${s.tabs.map((t) => t.label).join('\n')}\nНажмите — перенос в это письмо MoEngage` : s.line;
+    const dot = h('span', 'rk-ucc-dot'); dot.style.background = ready ? '#22c55e' : '#64748b';
+    b.append(dot, root.document.createTextNode(ready ? 'Перенести из UCC' : 'UCC'));
+    b.style.background = ready ? '#15803d' : '';
+    b.style.borderColor = ready ? '#16a34a' : '';
+    b.style.color = ready ? '#fff' : '';
+    b.title = ready ? `${s.tabs.map((t) => t.label).join('\n')}\nНажмите — перенос в это письмо MoEngage` : s.line;
+    // Полоса под панелью
+    const bar = b.closest?.('.rk-topbar');
+    let banner = root.document.getElementById(BANNER_ID);
+    if (!bar) return;
+    if (!banner) {
+      banner = h('div'); banner.id = BANNER_ID;
+      Object.assign(banner.style, { display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 14px', font: '12px/1.3 Inter,ui-sans-serif,sans-serif', borderBottom: '1px solid #1f2b3b' });
+      bar.insertAdjacentElement('afterend', banner);
+    }
+    banner.textContent = '';
+    banner.style.background = ready ? '#0f2a1a' : '#111827';
+    banner.style.color = ready ? '#bbf7d0' : '#94a3b8';
+    const d2 = h('span', 'rk-ucc-dot'); d2.style.background = ready ? '#22c55e' : '#64748b';
+    banner.append(d2);
+    if (!s.linkInstalled) { banner.append(root.document.createTextNode('Мост UCC не установлен — поставьте RetKit UCC Export.')); return; }
+    if (!ready) { banner.append(root.document.createTextNode('UCC: откройте письмо в UCC в соседней вкладке — оно появится здесь.')); return; }
+    banner.append(root.document.createTextNode(s.tabs.length > 1 ? `UCC на связи: открыто писем ${s.tabs.length}` : `UCC на связи: ${pick.label} · ${pick.locales || '?'} лок.`));
+    const go = h('button', null, s.tabs.length > 1 ? 'Выбрать и перенести →' : 'Перенести в это письмо →');
+    Object.assign(go.style, { marginLeft: 'auto', background: '#16a34a', color: '#fff', border: '0', borderRadius: '6px', padding: '5px 10px', font: '600 12px/1 inherit', cursor: 'pointer' });
+    go.addEventListener('click', () => open());
+    banner.append(go);
   }
   function bindButton(button) { boundButton = button; injectStyle(); paint(); }
 
@@ -10567,7 +10591,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.11.2');
+    setTextContentIfChanged(version, 'v0.11.3');
     return true;
   }
 
@@ -14316,7 +14340,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.11.2' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.11.3' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -14342,7 +14366,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.11.2 loaded');
+    console.log('[RetKit] MoEngage bridge v0.11.3 loaded');
   }
 
   bootBridge();
