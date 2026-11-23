@@ -59,7 +59,18 @@
       htmlLength: html.length,
       hash: html ? stableHash(html) : '',
       note: 'Сохранение кампании в MoEngage делает человек.',
+      ...lintHint(),
     };
+  }
+
+  // Итог проверки локалей (если RetKit уже проверил письмо) — агент видит
+  // проблему сразу, без отдельного вызова; подробности — lint_locales.
+  function lintHint() {
+    try {
+      const result = ws()?.getLocaleLint?.();
+      if (!result) return {};
+      return { localeLint: result.ok && !result.issues?.length ? result.summary : `${result.summary} — подробно: moengage_lint_locales` };
+    } catch { return {}; }
   }
 
   async function readEmail({ locale } = {}) {
@@ -69,7 +80,7 @@
     const wanted = normLocale(locale) || current;
     if (!wanted || wanted === current) {
       const html = String(api.getCurrentHtml() || '');
-      return { locale: current, html, hash: stableHash(html) };
+      return { locale: current, html, hash: stableHash(html), ...lintHint() };
     }
     const flushed = await core()?.flushBeforeLocaleSwitch?.();
     if (flushed && flushed.ok === false) throw new Error(`Не удалось досохранить ${current} перед переключением: ${flushed.reason || 'неизвестно'}`);
@@ -81,7 +92,7 @@
     } finally {
       if (current) await bridge().switchLocale(current);
     }
-    return { locale: wanted, html, hash: stableHash(html), note: `Человек снова на ${current}.` };
+    return { locale: wanted, html, hash: stableHash(html), note: `Человек снова на ${current}.`, ...lintHint() };
   }
 
   async function writeEmail({ html, based_on_hash: basedOn } = {}) {

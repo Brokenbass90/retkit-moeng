@@ -40,3 +40,10 @@ console.log('✓ live fixes: stale sync remembers its write; locale dot follows 
   assert.ok(core3.includes('retkit-mo-lint-ignore:${String(location.pathname'), 'ignore list per email');
   console.log('✓ issue click reveals code + preview; ignore per email in all locales');
 }
+
+// 0.10.7: the agent sees the locale-check summary in status and read_email without a separate call.
+{
+  const relay = fs.readFileSync(new URL('../src/ai/client/agent-relay.js', import.meta.url), 'utf8');
+  assert.ok(relay.includes('...lintHint(),') && relay.includes('hash: stableHash(html), ...lintHint() };'), 'status + read_email carry localeLint');
+  console.log('✓ agent sees localeLint in status / read_email');
+}

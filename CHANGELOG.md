@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.7
+
+- Connected AI sees the locale check without asking: `status` and `read_email` carry `localeLint` (summary; details — `moengage_lint_locales`). Ignored cases stay hidden for the agent too.
+
 ## 0.10.6
 
 - 🌐 Locales: click an issue — RetKit opens that locale, selects the place in the code and shows it in the preview.
