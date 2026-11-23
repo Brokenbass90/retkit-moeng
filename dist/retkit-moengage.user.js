@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.11.3
+// @version      0.11.4
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3324,7 +3324,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.3</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.4</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3349,7 +3349,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.11.3',
+        version: '0.11.4',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4930,7 +4930,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.11.3 loaded');
+    console.log('[RetKit] MoEngage workspace v0.11.4 loaded');
   }
 
   boot();
@@ -7327,7 +7327,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.11.3',
+          clientVersion: '0.11.4',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -7861,7 +7861,7 @@ module.exports = { isRtlLocale, applyRtl };
     const s = root.document.createElement('style');
     s.id = STYLE_ID;
     s.textContent = `
-      #${POP_ID}{position:fixed;z-index:2147483600;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;
+      #${POP_ID}{position:fixed;z-index:2147483646;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;
         border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.5);font:12px/1.45 Inter,ui-sans-serif,-apple-system,sans-serif}
       #${POP_ID} .u-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 8px;font-weight:600;font-size:13px}
       #${POP_ID} .u-x{background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer;line-height:1}
@@ -10591,7 +10591,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.11.3');
+    setTextContentIfChanged(version, 'v0.11.4');
     return true;
   }
 
@@ -14340,7 +14340,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.11.3' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.11.4' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -14366,7 +14366,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.11.3 loaded');
+    console.log('[RetKit] MoEngage bridge v0.11.4 loaded');
   }
 
   bootBridge();

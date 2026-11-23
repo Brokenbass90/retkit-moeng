@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.6.0
+// @version      0.6.1
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -414,7 +414,8 @@
       // MoEngage меняет адрес через #, поэтому смотрим не на путь, а на вкладки локалей письма.
       let locale = '';
       try { locale = W.__RetKitMoEngageBridgeApi?.getNativeTabLocale?.() || ''; } catch {}
-      const editor = Boolean(locale) && !/settings/i.test(location.href);
+      // RetKit открыт (полноэкранный редактор письма) или видны вкладки локалей MoEngage.
+      const editor = (Boolean(document.getElementById('retkit-mo-workspace')) || Boolean(locale)) && !/settings/i.test(location.href);
       gm.set(MO_PREFIX + TAB, { ts: now(), tab: TAB, title: moTitle(), path: location.pathname + location.hash, editor });
     }
     moBeat();
@@ -422,7 +423,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.6.0',
+      version: '0.6.1',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */

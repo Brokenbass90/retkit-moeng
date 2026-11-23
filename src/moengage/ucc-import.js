@@ -155,7 +155,7 @@
     const s = root.document.createElement('style');
     s.id = STYLE_ID;
     s.textContent = `
-      #${POP_ID}{position:fixed;z-index:2147483600;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;
+      #${POP_ID}{position:fixed;z-index:2147483646;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;
         border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.5);font:12px/1.45 Inter,ui-sans-serif,-apple-system,sans-serif}
       #${POP_ID} .u-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 8px;font-weight:600;font-size:13px}
       #${POP_ID} .u-x{background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer;line-height:1}
