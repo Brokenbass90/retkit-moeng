@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.12.1
+// @version      0.12.2
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3324,7 +3324,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.12.1</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.12.2</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3349,7 +3349,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.12.1',
+        version: '0.12.2',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4930,7 +4930,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.12.1 loaded');
+    console.log('[RetKit] MoEngage workspace v0.12.2 loaded');
   }
 
   boot();
@@ -7327,7 +7327,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.12.1',
+          clientVersion: '0.12.2',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -8137,12 +8137,15 @@ module.exports = { isRtlLocale, applyRtl };
       }
       await runImport(cmd);
     }
+    const AFTER_KEY = 'retkit.mo.mailbox.after';
+    const saveAfter = (v) => { try { root.sessionStorage.setItem(AFTER_KEY, String(v)); } catch {} };
     async function loop() {
+      try { after = Number(root.sessionStorage.getItem(AFTER_KEY) || 0); started = after > 0; } catch {}
       for (;;) {
         try {
           const data = await root.fetch(`${MAILBOX}/poll?to=mo&after=${after}&wait=${started ? 25000 : 0}`).then((r) => r.json());
-          if (!started) { after = data.lastId || 0; started = true; continue; }
-          for (const m of data.messages || []) { after = Math.max(after, m.id); if (m.from === 'claude') await handle(m); }
+          if (!started || (data.lastId || 0) < after) { after = data.lastId || 0; saveAfter(after); started = true; continue; }
+          for (const m of data.messages || []) { after = Math.max(after, m.id); saveAfter(after); if (m.from === 'claude') await handle(m); }
         } catch {
           await wait(5000);
         }
@@ -10693,7 +10696,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.12.1');
+    setTextContentIfChanged(version, 'v0.12.2');
     return true;
   }
 
@@ -14436,7 +14439,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.12.1' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.12.2' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -14462,7 +14465,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.12.1 loaded');
+    console.log('[RetKit] MoEngage bridge v0.12.2 loaded');
   }
 
   bootBridge();

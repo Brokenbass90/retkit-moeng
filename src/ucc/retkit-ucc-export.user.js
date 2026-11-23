@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.0
+// @version      0.8.1
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -479,7 +479,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.8.0',
+      version: '0.8.1',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -546,28 +546,44 @@
       }
       await exportFor(cmd);
     }
+    const AFTER_KEY = 'retkit.ucc.mailbox.after';
+    const saveAfter = (v) => { try { sessionStorage.setItem(AFTER_KEY, String(v)); } catch {} };
     async function loop() {
+      // Номер последней обработанной команды переживает переход на другое письмо:
+      // команды, пришедшие во время перезагрузки, не теряются.
+      try { after = Number(sessionStorage.getItem(AFTER_KEY) || 0); started = after > 0; } catch {}
       for (;;) {
         try {
           const url = `${MAILBOX}/poll?to=ucc&after=${after}&wait=${started ? 25000 : 0}`;
           const res = await (W.fetch || fetch)(url);
           const data = await res.json();
-          if (!started) { after = data.lastId || 0; started = true; continue; } // старые команды не выполняем
-          for (const m of data.messages || []) { after = Math.max(after, m.id); await handle(m); }
+          if (!started || (data.lastId || 0) < after) { after = data.lastId || 0; saveAfter(after); started = true; continue; } // новая вкладка или перезапуск bridge — старые команды не выполняем
+          for (const m of data.messages || []) {
+            after = Math.max(after, m.id); saveAfter(after);
+            if (m.from !== 'claude') continue;
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.8.1' }).catch(() => {}); continue; }
+            await handle(m);
+          }
         } catch {
           await new Promise((r) => setTimeout(r, 5000));
         }
       }
     }
-    // Команда пришла до перехода на нужное письмо — выполнить после загрузки.
+    // Команда пришла до перехода на нужное письмо — выполнить после загрузки (и доложить, если не вышло).
     try {
       const pending = JSON.parse(sessionStorage.getItem(PENDING_KEY) || 'null');
       if (pending) {
         sessionStorage.removeItem(PENDING_KEY);
-        const wait = () => (String(templateId()) === String(pending.uccId) ? exportFor(pending) : setTimeout(wait, 500));
-        setTimeout(wait, 1500);
+        const started = Date.now();
+        const wait = () => {
+          if (String(templateId()) === String(pending.uccId)) { exportFor(pending); return; }
+          if (Date.now() - started > 30000) { mbPost('claude', { type: 'error', cmd: pending.id, uccId: pending.uccId, error: `UCC не открыл письмо ${pending.uccId}: сейчас ${location.href}` }).catch(() => {}); return; }
+          setTimeout(wait, 500);
+        };
+        setTimeout(wait, 1000);
       }
     } catch {}
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.8.1' }).catch(() => {});
     loop();
   }
 

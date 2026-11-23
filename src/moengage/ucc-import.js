@@ -431,12 +431,15 @@
       }
       await runImport(cmd);
     }
+    const AFTER_KEY = 'retkit.mo.mailbox.after';
+    const saveAfter = (v) => { try { root.sessionStorage.setItem(AFTER_KEY, String(v)); } catch {} };
     async function loop() {
+      try { after = Number(root.sessionStorage.getItem(AFTER_KEY) || 0); started = after > 0; } catch {}
       for (;;) {
         try {
           const data = await root.fetch(`${MAILBOX}/poll?to=mo&after=${after}&wait=${started ? 25000 : 0}`).then((r) => r.json());
-          if (!started) { after = data.lastId || 0; started = true; continue; }
-          for (const m of data.messages || []) { after = Math.max(after, m.id); if (m.from === 'claude') await handle(m); }
+          if (!started || (data.lastId || 0) < after) { after = data.lastId || 0; saveAfter(after); started = true; continue; }
+          for (const m of data.messages || []) { after = Math.max(after, m.id); saveAfter(after); if (m.from === 'claude') await handle(m); }
         } catch {
           await wait(5000);
         }
