@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.3.0
+// @version      0.4.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -109,10 +109,17 @@
     return s || fallback;
   }
 
+  // Список отправителей: на части стендов /api/email/senders/ без параметров отвечает 400.
+  async function getSenders(tpl) {
+    for (const url of [`/api/email/senders/?brand_id=${tpl.brand_id}`, '/api/email/senders', '/api/email/senders/']) {
+      try { const list = asList(await getJson(url)); if (list.length) return list; } catch {}
+    }
+    return [];
+  }
   async function collect(id) {
     const tpl = await getJson(`/api/email/templates/${id}`);
     const [senders, categories] = await Promise.all([
-      getJson('/api/email/senders/').then(asList).catch(() => []),
+      getSenders(tpl),
       getJson('/api/email/categories').then(asList).catch(() => []),
     ]);
     const sender = senders.find((s) => s.id === tpl.email_sender_id);
@@ -279,6 +286,7 @@
   // Каждая вкладка UCC пишет своё присутствие в свой ключ: открыто несколько писем — видны все.
   const TAB = Math.random().toString(36).slice(2, 10);
   const PRESENCE_PREFIX = 'retkit.ucc.presence.';
+  const MO_PREFIX = 'retkit.mo.presence.';
   const now = () => Date.now();
 
   function uccLink() {
@@ -312,39 +320,47 @@
     setInterval(heartbeat, 2000);
     try { W.addEventListener('pagehide', () => gm.del(PRESENCE_PREFIX + TAB)); } catch {}
 
-    // Кнопка «→ MoEngage»: то же, но по инициативе UCC — RetKit в MoEngage откроет окно переноса.
-    const PUSH_ID = 'retkit-ucc-push';
-    function syncPush() {
-      const id = templateId();
-      let button = document.getElementById(PUSH_ID);
-      if (!id) { button?.remove(); return; }
-      if (button) { button.dataset.id = id; return; }
-      button = document.createElement('button');
-      button.id = PUSH_ID; button.type = 'button'; button.dataset.id = id;
-      button.textContent = '→ MoEngage';
-      button.title = 'RetKit: открыть перенос этого письма в RetKit for MoEngage (там подтверждаете). В UCC ничего не меняется.';
-      Object.assign(button.style, {
-        position: 'fixed', right: '20px', bottom: '64px', zIndex: 99999, padding: '10px 16px',
-        borderRadius: '8px', border: 'none', background: '#0f9d58', color: '#fff', font: '600 14px/1 sans-serif',
-        cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,.25)',
-      });
-      button.addEventListener('click', async () => {
-        button.disabled = true; button.textContent = '⏳ читаю…';
-        try {
-          const mail = await collect(button.dataset.id);
-          gm.set(KEY.push, { requestId: `push-${mail.id}-${now().toString(36)}`, ts: now(), transfer: transferFor(mail) });
-          button.textContent = '✓ открыто в MoEngage';
-        } catch (error) {
-          button.textContent = '✕ ошибка';
-          alert(`RetKit UCC: ${error.message}`);
-        } finally {
-          setTimeout(() => { button.disabled = false; button.textContent = '→ MoEngage'; }, 2500);
-        }
-      });
-      document.body.appendChild(button);
+    // Индикатор моста: к какой вкладке MoEngage натянут. Перенос запускается в RetKit (MoEngage).
+    const PILL_ID = 'retkit-ucc-pill';
+    function moTabs() {
+      const list = [];
+      for (const k of gm.keys()) {
+        if (!String(k).startsWith(MO_PREFIX)) continue;
+        const p = gm.get(k, null);
+        const age = p ? now() - (p.ts || 0) : Infinity;
+        if (age > 60000) { gm.del(k); continue; }
+        if (age < 6000 && p.editor) list.push(p);
+      }
+      return list;
     }
-    syncPush();
-    setInterval(syncPush, 1000);
+    function syncPill() {
+      const id = templateId();
+      let pill = document.getElementById(PILL_ID);
+      if (!id) { pill?.remove(); return; }
+      if (!pill) {
+        pill = document.createElement('div');
+        pill.id = PILL_ID;
+        Object.assign(pill.style, {
+          position: 'fixed', right: '20px', bottom: '64px', zIndex: 99999, padding: '8px 12px', borderRadius: '999px',
+          background: '#0f1722', color: '#e6edf7', font: '600 12px/1 sans-serif', boxShadow: '0 4px 14px rgba(0,0,0,.25)',
+          display: 'flex', alignItems: 'center', gap: '7px', maxWidth: '360px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        });
+        document.body.appendChild(pill);
+      }
+      const tabs = moTabs();
+      const dot = tabs.length ? '#22c55e' : '#64748b';
+      const text = !tabs.length ? 'MoEngage: письмо не открыто' : (tabs.length === 1 ? `MoEngage: ${tabs[0].title || 'письмо'}` : `MoEngage: ${tabs.length} письма`);
+      pill.innerHTML = '';
+      const d = document.createElement('span');
+      Object.assign(d.style, { width: '8px', height: '8px', borderRadius: '50%', background: dot, flex: '0 0 8px' });
+      const t = document.createElement('span'); t.textContent = `⇄ ${text}`;
+      pill.append(d, t);
+      pill.title = tabs.length
+        ? `Мост RetKit на связи с:\n${tabs.map((x) => `• ${x.title || x.path}`).join('\n')}\nПеренос: в MoEngage → RetKit → чип «UCC».`
+        : 'Откройте письмо в MoEngage и RetKit — мост появится здесь.';
+    }
+    syncPill();
+    setInterval(syncPill, 2000);
   }
 
   function moengageLink() {
@@ -373,8 +389,20 @@
       for (const fn of listeners.presence) { try { fn(list); } catch {} }
     }, 2000);
     gm.on(KEY.push, (req, remote) => { if (remote && req?.transfer) for (const fn of listeners.push) { try { fn(req); } catch {} } });
+    // Присутствие этой вкладки MoEngage — для индикатора в UCC.
+    function moTitle() {
+      const pick = (sel) => { try { return String(document.querySelector(sel)?.value || document.querySelector(sel)?.textContent || '').trim(); } catch { return ''; } };
+      return pick('input[name*="campaign" i][name*="name" i]') || pick('[data-testid*="campaign-name" i]') || String(document.title || '').replace(/\s*[|·-]\s*MoEngage.*$/i, '').trim();
+    }
+    function moBeat() {
+      const editor = Boolean(W.__RetKitMoEngageBridgeApi) && /campaign|flows|email/i.test(location.pathname) && !/settings/i.test(location.pathname);
+      gm.set(MO_PREFIX + TAB, { ts: now(), tab: TAB, title: moTitle(), path: location.pathname, editor });
+    }
+    moBeat();
+    setInterval(moBeat, 2000);
+    try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.3.0',
+      version: '0.4.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */

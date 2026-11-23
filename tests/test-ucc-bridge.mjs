@@ -66,7 +66,7 @@ const ucc = tab('ucc.int.iqoption.com', '/email-templates/15928/edit', { fetch }
 const exp = ucc.sandbox.__retkitUccExport;
 assert.deepEqual(JSON.parse(JSON.stringify(exp.MAP)), { replace: mapFile.replace, moengageLocales: mapFile.moengageLocales });
 assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-export'), 'кнопка ZIP');
-assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-push'), 'кнопка → MoEngage');
+assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill'), 'индикатор моста');
 await tick(); await tick();
 for (const f of ucc.timers) await f();
 const presence = Object.entries(store).filter(([k]) => k.startsWith('retkit.ucc.presence.')).map(([, v]) => v);
@@ -105,7 +105,7 @@ vm.runInContext(importSrc, mo.sandbox);
 const imp = mo.sandbox.__RetKitUccImport;
 const st = imp.status();
 assert.equal(st.ready, true, st.line);
-assert.match(st.line, /2fa-code \(auth\) · INT/);
+assert.match(st.line, /2fa-code · auth · INT/);
 
 const planned = await imp.agent({});
 assert.deepEqual([...planned.plan.missing], ['pt_PT']);

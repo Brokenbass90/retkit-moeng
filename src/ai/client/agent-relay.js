@@ -60,6 +60,7 @@
       hash: html ? stableHash(html) : '',
       note: 'Сохранение кампании в MoEngage делает человек.',
       ucc: root.__RetKitUccImport?.status?.().line || 'UCC: мост не установлен',
+      uccLast: root.__RetKitUccImport?.last?.() || undefined,
       ...lintHint(),
     };
   }
