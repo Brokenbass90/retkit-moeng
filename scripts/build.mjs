@@ -58,3 +58,11 @@ const output = `${header}\n\n${sections.join('\n\n')}\n`;
 fs.mkdirSync(path.dirname(distPath), { recursive: true });
 fs.writeFileSync(distPath, output);
 console.log(`Built ${path.relative(root, distPath)} (${Buffer.byteLength(output)} bytes)`);
+
+// Отдельный userscript для UCC: свой @match, ставится отдельно в Tampermonkey.
+const uccSrc = path.join(root, 'src/ucc/retkit-ucc-export.user.js');
+if (fs.existsSync(uccSrc)) {
+  const uccDist = path.join(root, 'dist/retkit-ucc-export.user.js');
+  fs.copyFileSync(uccSrc, uccDist);
+  console.log(`Built ${path.relative(root, uccDist)}`);
+}
