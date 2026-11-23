@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.1
+// @version      0.8.2
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -479,7 +479,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.8.1',
+      version: '0.8.2',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -539,11 +539,8 @@
     let started = false;
     async function handle(cmd) {
       if (cmd.type !== 'open' || !cmd.uccId) return;
-      if (String(templateId()) !== String(cmd.uccId)) {
-        try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(cmd)); } catch {}
-        location.assign(`/email-templates/${cmd.uccId}/edit`);
-        return;
-      }
+      // Без перехода: письмо читается через API UCC по номеру с любой страницы UCC.
+      // (Перезагрузка страницы запускает вход UCC, который ломает адрес.)
       await exportFor(cmd);
     }
     const AFTER_KEY = 'retkit.ucc.mailbox.after';
@@ -561,7 +558,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.8.1' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.8.2' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -583,7 +580,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.8.1' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.8.2' }).catch(() => {});
     loop();
   }
 
