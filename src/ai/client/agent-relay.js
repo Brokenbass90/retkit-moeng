@@ -59,6 +59,7 @@
       htmlLength: html.length,
       hash: html ? stableHash(html) : '',
       note: 'Сохранение кампании в MoEngage делает человек.',
+      ucc: root.__RetKitUccImport?.status?.().line || 'UCC: мост не установлен',
       ...lintHint(),
     };
   }
@@ -125,6 +126,13 @@
       requireWorkspace();
       const plan = await ws().acrossLocales({ query: String(args?.query || ''), replacement: args?.replacement });
       return { ...plan, note: args?.replacement !== undefined ? 'Замена подготовлена и показана человеку — нажимает он.' : undefined };
+    }
+    if (tool === 'ucc_status') return root.__RetKitUccImport?.status?.() || { linkInstalled: false, line: 'UCC: мост не установлен' };
+    if (tool === 'ucc_import') {
+      requireWorkspace();
+      const imp = root.__RetKitUccImport;
+      if (!imp) throw new Error('Перенос из UCC недоступен в этой версии RetKit');
+      return imp.agent({ apply: args?.apply === true, applySender: args?.apply_sender === true, id: args?.id });
     }
     if (tool === 'validator') { requireWorkspace(); return { issues: ws().getValidatorIssues?.() || [] }; }
     if (tool === 'lint_locales') {

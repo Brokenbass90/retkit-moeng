@@ -1,13 +1,18 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.1.0
-// @description  Кнопка «⬇ ZIP письма» в UCC: все локали письма (HTML + Subject) и параметры одним архивом. Только чтение.
+// @version      0.2.0
+// @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
+// @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-ucc-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-ucc-export.user.js
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addValueChangeListener
+// @grant        unsafeWindow
+// @sandbox      JavaScript
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -29,7 +34,10 @@
  */
 (function () {
   'use strict';
-  if (window.__retkitUccExport) return;
+  // Под Tampermonkey с @grant страница — unsafeWindow; в тестах — обычный window.
+  const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  if (W.__retkitUccExport) return;
+  const IS_UCC = /(^|\.)ucc(\.int)?\.iqoption\.com$/.test(location.host);
 
   // ─── ZIP без зависимостей (метод STORE) ───────────────────────────────────
   const CRC = (() => {
@@ -79,7 +87,7 @@
 
   // ─── Данные письма ────────────────────────────────────────────────────────
   async function getJson(url) {
-    const res = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json' } });
+    const res = await (W.fetch || fetch)(url, { credentials: 'include', headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return res.json();
   }
@@ -123,6 +131,8 @@
       microserviceTitle: tpl.microservice?.Title || '',
       brandId: tpl.brand_id,
       sender: describe(sender) || (tpl.email_sender_id != null ? `id ${tpl.email_sender_id}` : ''),
+      senderEmail: sender?.email || sender?.address || '',
+      senderName: sender?.name && sender.name !== (sender.email || '') ? sender.name : '',
       category: describe(category) || (tpl.email_category_id != null ? `id ${tpl.email_category_id}` : ''),
       presetId: tpl.preset_id,
       status: tpl.status_id,
@@ -207,7 +217,164 @@
     document.body.appendChild(button);
   }
 
-  window.__retkitUccExport = { collect, filesFor, makeZip, exportZip };
-  sync();
-  setInterval(sync, 1000); // UCC — одностраничное приложение, адрес меняется без перезагрузки
+  // ─── Мост в RetKit for MoEngage ───────────────────────────────────────────
+  // Вкладки UCC и MoEngage — разные сайты. Связь — общее хранилище этого скрипта
+  // в Tampermonkey (GM_setValue + GM_addValueChangeListener), оно одно на все вкладки.
+  //   UCC: раз в 2 с пишет «присутствие» (какое письмо открыто), отвечает на запрос
+  //        письма готовым заданием (футер заменён, локали сопоставлены). Только GET.
+  //   MoEngage: публикует window.__RetKitUccLink — им пользуется RetKit for MoEngage
+  //        (кнопка «⇄ UCC», зелёная, когда вкладка UCC с письмом на связи).
+  const MAP = {
+    // Зеркало tools/ucc-footer-map.json (тест следит, чтобы совпадали).
+    replace: {
+      '{{embedded.company_address}}': "{{ContentBlock['iq_company_address_text']}}",
+      '{{embedded.risk_warning}}': "{{ContentBlock['iq_risk_warning_noreg_{LANG}']}}",
+      '{{embedded.company_terms_link}}': "{{ContentBlock['iq_terms_noreg_url']}}",
+      '{{embedded.domain}}/traderoom/': 'https://iqbroker.co/lp/multilink/asset?aff=7&amp;afftrack=mail_system&amp;retrack=system',
+    },
+    moengageLocales: { en: 'en_US', ar: 'ar_KW', es: 'es_ES', pt: 'pt_PT', th: 'th_TH', id: 'id_ID', vi: 'vi_VN', fr: 'fr_FR' },
+  };
+  const PLACEHOLDER_RE = /\{\{\s*[^{}]+?\s*\}\}/g;
+
+  function applyFooter(html, code) {
+    const lang = String(code || '').toUpperCase();
+    let out = String(html || '');
+    for (const [from, to] of Object.entries(MAP.replace)) if (to) out = out.split(from).join(to.split('{LANG}').join(lang));
+    return out;
+  }
+
+  /** Письмо (результат collect) → задание для MoEngage. */
+  function transferFor(mail, { defaultFromEn = true } = {}) {
+    const locales = []; const skipped = []; const empty = []; const placeholders = {};
+    for (const l of mail.locales) {
+      const code = String(l.code || '').toLowerCase();
+      const mo = MAP.moengageLocales[code] || '';
+      const html = applyFooter(l.html, code);
+      if (!mo) { skipped.push(code.toUpperCase()); continue; }
+      if (!html.trim()) { empty.push(code.toUpperCase()); continue; }
+      for (const m of html.match(PLACEHOLDER_RE) || []) if (!/ContentBlock\[/.test(m)) placeholders[m] = (placeholders[m] || 0) + 1;
+      locales.push({ ucc: code.toUpperCase(), mo, subject: l.subject, html });
+    }
+    // Default — запасная локаль MoEngage, без неё кампания не сохраняется. Берём EN.
+    const en = locales.find((l) => l.ucc === 'EN');
+    if (defaultFromEn && en) locales.unshift({ ...en, mo: 'Default' });
+    return {
+      id: mail.id, name: mail.name, host: mail.host, uccUrl: `https://${mail.host}/email-templates/${mail.id}/edit`,
+      microservice: mail.microservice, sender: mail.sender, senderEmail: mail.senderEmail || '', senderName: mail.senderName || '',
+      category: mail.category, locales, skipped, empty, placeholders,
+      footerLeftovers: Object.keys(MAP.replace).filter((k) => locales.some((l) => l.html.includes(k))),
+    };
+  }
+
+  const KEY = { presence: 'retkit.ucc.presence', pull: 'retkit.ucc.pull', reply: 'retkit.ucc.reply', push: 'retkit.ucc.push' };
+  const gm = {
+    get: (k, d) => { try { return GM_getValue(k, d); } catch { return d; } },
+    set: (k, v) => { try { GM_setValue(k, v); return true; } catch { return false; } },
+    on: (k, fn) => { try { GM_addValueChangeListener(k, (_n, _o, v, remote) => fn(v, remote)); return true; } catch { return false; } },
+  };
+  const now = () => Date.now();
+
+  function uccLink() {
+    const metaCache = new Map(); // id → { name, microservice }
+    async function heartbeat() {
+      const id = templateId();
+      if (!id) { gm.set(KEY.presence, { ts: now(), host: location.host, id: null }); return; }
+      let meta = metaCache.get(id);
+      if (!meta) {
+        meta = { name: '', microservice: '' };
+        metaCache.set(id, meta);
+        getJson(`/api/email/templates/${id}`).then((tpl) => {
+          meta.name = tpl.name || ''; meta.microservice = tpl.microservice_name || tpl.microservice?.Name || '';
+          meta.locales = (tpl.locales || []).length;
+        }).catch(() => metaCache.delete(id));
+      }
+      gm.set(KEY.presence, { ts: now(), host: location.host, id, name: meta.name, microservice: meta.microservice, locales: meta.locales || 0 });
+    }
+    gm.on(KEY.pull, async (req, remote) => {
+      if (!remote || !req?.requestId || now() - (req.ts || 0) > 60000) return;
+      const id = templateId();
+      if (!id || (req.id && String(req.id) !== String(id))) return; // спрашивают не про наше письмо
+      try {
+        const mail = await collect(id);
+        gm.set(KEY.reply, { requestId: req.requestId, ts: now(), transfer: transferFor(mail) });
+      } catch (error) {
+        gm.set(KEY.reply, { requestId: req.requestId, ts: now(), error: error?.message || String(error) });
+      }
+    });
+    heartbeat();
+    setInterval(heartbeat, 2000);
+
+    // Кнопка «→ MoEngage»: то же, но по инициативе UCC — RetKit в MoEngage откроет окно переноса.
+    const PUSH_ID = 'retkit-ucc-push';
+    function syncPush() {
+      const id = templateId();
+      let button = document.getElementById(PUSH_ID);
+      if (!id) { button?.remove(); return; }
+      if (button) { button.dataset.id = id; return; }
+      button = document.createElement('button');
+      button.id = PUSH_ID; button.type = 'button'; button.dataset.id = id;
+      button.textContent = '→ MoEngage';
+      button.title = 'RetKit: открыть перенос этого письма в RetKit for MoEngage (там подтверждаете). В UCC ничего не меняется.';
+      Object.assign(button.style, {
+        position: 'fixed', right: '20px', bottom: '64px', zIndex: 99999, padding: '10px 16px',
+        borderRadius: '8px', border: 'none', background: '#0f9d58', color: '#fff', font: '600 14px/1 sans-serif',
+        cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,.25)',
+      });
+      button.addEventListener('click', async () => {
+        button.disabled = true; button.textContent = '⏳ читаю…';
+        try {
+          const mail = await collect(button.dataset.id);
+          gm.set(KEY.push, { requestId: `push-${mail.id}-${now().toString(36)}`, ts: now(), transfer: transferFor(mail) });
+          button.textContent = '✓ открыто в MoEngage';
+        } catch (error) {
+          button.textContent = '✕ ошибка';
+          alert(`RetKit UCC: ${error.message}`);
+        } finally {
+          setTimeout(() => { button.disabled = false; button.textContent = '→ MoEngage'; }, 2500);
+        }
+      });
+      document.body.appendChild(button);
+    }
+    syncPush();
+    setInterval(syncPush, 1000);
+  }
+
+  function moengageLink() {
+    const listeners = { presence: new Set(), push: new Set() };
+    const pending = new Map();
+    gm.on(KEY.reply, (r) => { const p = pending.get(r?.requestId); if (p) { pending.delete(r.requestId); r.error ? p.reject(new Error(r.error)) : p.resolve(r.transfer); } });
+    gm.on(KEY.presence, (p) => { for (const fn of listeners.presence) { try { fn(p); } catch {} } });
+    gm.on(KEY.push, (req, remote) => { if (remote && req?.transfer) for (const fn of listeners.push) { try { fn(req); } catch {} } });
+    W.__RetKitUccLink = {
+      version: '0.2.0',
+      /** Что открыто в UCC: { online, id, name, microservice, locales, host, ageMs }. */
+      presence() {
+        const p = gm.get(KEY.presence, null);
+        const ageMs = p ? now() - (p.ts || 0) : Infinity;
+        return { online: ageMs < 6000, ageMs, id: p?.id || null, name: p?.name || '', microservice: p?.microservice || '', locales: p?.locales || 0, host: p?.host || '' };
+      },
+      /** Забрать задание переноса из открытой вкладки UCC. */
+      pull({ id, timeoutMs = 20000 } = {}) {
+        const requestId = `pull-${now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('UCC не ответил: откройте письмо в UCC (вкладка должна быть открыта)')); }, timeoutMs);
+          pending.set(requestId, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
+          if (!gm.set(KEY.pull, { requestId, ts: now(), id: id || null })) { clearTimeout(timer); pending.delete(requestId); reject(new Error('Хранилище Tampermonkey недоступно')); }
+        });
+      },
+      onPresence(fn) { listeners.presence.add(fn); return () => listeners.presence.delete(fn); },
+      onPush(fn) { listeners.push.add(fn); return () => listeners.push.delete(fn); },
+    };
+    try { W.dispatchEvent(new W.CustomEvent('retkit:ucc-link-ready')); } catch {}
+  }
+
+  W.__retkitUccExport = { collect, filesFor, makeZip, exportZip, transferFor, applyFooter, MAP };
+  if (IS_UCC) {
+    sync();
+    setInterval(sync, 1000); // UCC — одностраничное приложение, адрес меняется без перезагрузки
+    uccLink();
+  } else if (/moengage\.com$/.test(location.host)) {
+    moengageLink();
+  }
 })();
+
