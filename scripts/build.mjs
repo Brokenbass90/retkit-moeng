@@ -60,6 +60,13 @@ fs.writeFileSync(distPath, output);
 console.log(`Built ${path.relative(root, distPath)} (${Buffer.byteLength(output)} bytes)`);
 
 // Отдельный userscript для UCC: свой @match, ставится отдельно в Tampermonkey.
+const uccMoSrc = path.join(root, 'src/ucc/retkit-ucc-to-moengage.user.js');
+if (fs.existsSync(uccMoSrc)) {
+  const uccMoDist = path.join(root, 'dist/retkit-ucc-to-moengage.user.js');
+  fs.copyFileSync(uccMoSrc, uccMoDist);
+  console.log(`Built ${path.relative(root, uccMoDist)}`);
+}
+
 const uccSrc = path.join(root, 'src/ucc/retkit-ucc-export.user.js');
 if (fs.existsSync(uccSrc)) {
   const uccDist = path.join(root, 'dist/retkit-ucc-export.user.js');
