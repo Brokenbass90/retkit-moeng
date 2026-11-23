@@ -1,5 +1,12 @@
 {
-  "{{embedded.risk_warning}}": "",
-  "{{embedded.company_address}}": "",
-  "{{embedded.company_terms_link}}": ""
+  "_comment": "Футер UCC -> MoEngage (noreg). {LANG} = суффикс языка MoEngage (EN, PT…). Для рег-писем будет отдельная карта.",
+  "replace": {
+    "{{embedded.company_address}}": "{{ContentBlock['iq_company_address_text']}}",
+    "{{embedded.risk_warning}}": "{{ContentBlock['iq_risk_warning_noreg_{LANG}']}}",
+    "{{embedded.company_terms_link}}": "{{ContentBlock['iq_terms_noreg_url']}}"
+  },
+  "moengageLocales": {
+    "en": "en_US", "ar": "ar_KW", "es": "es_ES", "pt": "pt_PT",
+    "th": "th_TH", "id": "id_ID", "vi": "vi_VN", "fr": "fr_FR"
+  }
 }

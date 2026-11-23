@@ -18,7 +18,9 @@ if (!input) { console.error('usage: ucc-unpack.mjs <ucc.json> [out] [--map file]
 const out = args[1] && !args[1].startsWith('--') ? args[1] : 'migration';
 const mapIdx = args.indexOf('--map');
 const mapPath = mapIdx >= 0 ? args[mapIdx + 1] : new URL('./ucc-footer-map.json', import.meta.url).pathname;
-const footerMap = fs.existsSync(mapPath) ? JSON.parse(fs.readFileSync(mapPath, 'utf8')) : {};
+const mapFile = fs.existsSync(mapPath) ? JSON.parse(fs.readFileSync(mapPath, 'utf8')) : {};
+const footerMap = mapFile.replace || {};
+const moLocales = mapFile.moengageLocales || {};
 
 const raw = JSON.parse(fs.readFileSync(input, 'utf8'));
 const tpl = raw.template || raw;
@@ -32,18 +34,21 @@ const dir = path.join(out, ms, safe(tpl.name));
 fs.mkdirSync(dir, { recursive: true });
 
 const placeholderRe = /\{\{\s*[^{}]+?\s*\}\}/g;
-const report = { name: tpl.name, id: tpl.id, microservice: ms, locales: [], placeholders: {}, footerUnmapped: new Set() };
+const report = { name: tpl.name, id: tpl.id, microservice: ms, locales: [], placeholders: {}, footerUnmapped: new Set(), noMoengageLocale: [] };
 
 for (const l of tpl.locales || []) {
   const code = safe(l.locale?.short_name || l.locale?.name || l.locale_id);
   let html = l.html_body || '';
-  for (const [from, to] of Object.entries(footerMap)) if (to) html = html.split(from).join(to);
+  const lang = code.toUpperCase();
+  for (const [from, to] of Object.entries(footerMap)) if (to) html = html.split(from).join(to.replaceAll('{LANG}', lang));
+  const moLocale = moLocales[code] || '';
+  if (!moLocale) report.noMoengageLocale.push(code);
   for (const from of Object.keys(footerMap)) if (!footerMap[from] && html.includes(from)) report.footerUnmapped.add(from);
   for (const m of html.match(placeholderRe) || []) report.placeholders[m] = (report.placeholders[m] || 0) + 1;
   fs.mkdirSync(path.join(dir, code), { recursive: true });
   fs.writeFileSync(path.join(dir, code, 'index.html'), html);
   fs.writeFileSync(path.join(dir, code, 'subject.txt'), `${l.subject || ''}\n`);
-  report.locales.push({ code, name: l.locale?.name, status: l.status?.name, subject: l.subject || '', empty: !html.trim(), bytes: html.length });
+  report.locales.push({ code, moengage: moLocale, name: l.locale?.name, status: l.status?.name, subject: l.subject || '', empty: !html.trim(), bytes: html.length });
 }
 
 const params = [
@@ -51,9 +56,9 @@ const params = [
   `Microservice: ${ms}`, `Sender: ${sender?.email || sender?.name || tpl.email_sender_id}`,
   `Category: ${category?.name || category?.title || tpl.email_category_id}`, `Brand ID: ${tpl.brand_id}`,
   `Locales (${report.locales.length}): ${report.locales.map((l) => l.code.toUpperCase()).join(', ')}`, '',
-  ...report.locales.map((l) => `${l.code.toUpperCase()}\t${l.status || ''}\t${l.subject}`), '',
+  ...report.locales.map((l) => `${l.code.toUpperCase()}\t${l.moengage || 'нет в MoEngage'}\t${l.status || ''}\t${l.subject}`), '',
 ].filter((x) => x !== '' || true).join('\n');
 fs.writeFileSync(path.join(dir, 'params.txt'), params);
 fs.writeFileSync(path.join(dir, 'subjects.txt'), report.locales.map((l) => `${l.code}\t${l.subject}`).join('\n') + '\n');
 fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify({ ...report, footerUnmapped: [...report.footerUnmapped] }, null, 2));
-console.log(JSON.stringify({ dir, locales: report.locales.length, empty: report.locales.filter((l) => l.empty).map((l) => l.code), placeholders: report.placeholders, footerUnmapped: [...report.footerUnmapped] }, null, 2));
+console.log(JSON.stringify({ dir, locales: report.locales.length, toMoengage: report.locales.filter((l) => l.moengage).map((l) => l.moengage), noMoengageLocale: report.noMoengageLocale, empty: report.locales.filter((l) => l.empty).map((l) => l.code), placeholders: report.placeholders, footerUnmapped: [...report.footerUnmapped] }, null, 2));
