@@ -30,3 +30,13 @@ console.log('✓ live fixes: stale sync remembers its write; locale dot follows 
   assert.ok(core2.includes('STATE.localeHtmlCache = {};'), 'cache is per campaign');
   console.log('✓ auto locale check on open, per campaign, idle only');
 }
+
+// 0.10.6: click an issue → its place in code and preview; «игнор» hides the case in every locale of this email.
+{
+  const core3 = fs.readFileSync(new URL('../src/core/retkit-moengage-core.user.js', import.meta.url), 'utf8');
+  assert.ok(core3.includes("row.addEventListener('click', () => { void revealLocaleIssue(item); });"), 'row reveals the issue');
+  assert.ok(core3.includes('editor.scrollIntoView({ from, to }, 140);') && core3.includes("best.scrollIntoView({ block: 'center' });"), 'code and preview scroll to it');
+  assert.ok(core3.includes('ignore: localeLintIgnored()'), 'ignore list goes to the checker');
+  assert.ok(core3.includes('retkit-mo-lint-ignore:${String(location.pathname'), 'ignore list per email');
+  console.log('✓ issue click reveals code + preview; ignore per email in all locales');
+}

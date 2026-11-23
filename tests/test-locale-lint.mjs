@@ -124,6 +124,19 @@ assert.ok(codes(r, 'fr').includes('fr#-:missing_block:error'), codes(r, 'fr').jo
   assert.deepEqual(codes(r, 'ID'), [], JSON.stringify(r.issues));
 }
 
+// 3h. Ignore a case everywhere: the same issue key in every locale is hidden at once.
+{
+  const page = (t, extra) => `<html><body><p>${t}</p><p>${extra}</p></body></html>`;
+  const htmlByLocale = { EN: page('You are ready to enter the real market now', 'Special offer inside'), ID: page('Anda sudah siap terjun ke pasar sebenarnya', 'Special offer inside'), FR: page('Vous êtes prêt à entrer sur le vrai marché', 'Special offer inside') };
+  r = L.lintHtml({ htmlByLocale });
+  const keys = [...new Set(JSON.parse(JSON.stringify(r.issues)).map((x) => x.key))];
+  assert.equal(keys.length, 1, 'one case, one key in every locale');
+  r = L.lintHtml({ htmlByLocale, ignore: keys });
+  assert.deepEqual(codes(r), []);
+  assert.equal(r.ignored, 2);
+  assert.ok(r.summary.endsWith('· скрыто 2'), r.summary);
+}
+
 // 4. Spanish text in the French locale: language.
 r = L.lint({ locales: { en, fr: es.slice() } });
 assert.ok(codes(r, 'fr').includes('fr#-:wrong_lang:error'), JSON.stringify(r.issues));

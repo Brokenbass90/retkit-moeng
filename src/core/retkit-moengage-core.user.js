@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.5
+// @version      0.10.6
 // @description  Fullscreen email coding workspace for MoEngage with live preview and click-to-source navigation.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -1448,6 +1448,8 @@
       #retkit-mo-locale-lint-button.rk-lint-error { color:#ff8a92; }
       #retkit-mo-locale-lint-button.rk-lint-warn { color:#f4be63; }
       #retkit-mo-locale-lint-button.rk-lint-ok { color:#72d6a0; }
+      .rk-lint-ignore { color:#8293a8; font-size:11px; white-space:nowrap; padding:2px 6px; border:1px solid #2b3747; border-radius:6px; }
+      .rk-lint-ignore:hover { color:#dce6f4; border-color:#4f7cff; }
       .rk-lint-auto { color:#9fb0c6; font-size:11px; display:flex; align-items:center; gap:3px; cursor:pointer; }
       .rk-lint-summary { color:#9fb0c6; font-size:11px; padding:6px 8px; border-bottom:1px solid #202b39; }
     `;
@@ -2554,7 +2556,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.5</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.10.6</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -2579,7 +2581,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.10.5',
+        version: '0.10.6',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -3837,10 +3839,10 @@
       applyLocaleLintMarks();
       return null;
     }
-    const key = lint.fingerprint(cache);
+    const key = `${lint.fingerprint(cache)}|${localeLintIgnored().length}`;
     if (key !== STATE.localeLintKey || !STATE.localeLint) {
       try {
-        STATE.localeLint = lint.lintHtml({ htmlByLocale: cache, refCode });
+        STATE.localeLint = lint.lintHtml({ htmlByLocale: cache, refCode, ignore: localeLintIgnored() });
         STATE.localeLintKey = key;
       } catch (error) {
         STATE.localeLint = null;
@@ -3948,6 +3950,79 @@
     };
   }
 
+  // «Не ошибка» — по письму (кампании): тот же случай скрыт во всех его локалях.
+  function localeLintIgnoreKey() { return `retkit-mo-lint-ignore:${String(location.pathname || '')}`; }
+  function localeLintIgnored() {
+    try { const list = JSON.parse(root.localStorage?.getItem(localeLintIgnoreKey()) || '[]'); return Array.isArray(list) ? list : []; } catch { return []; }
+  }
+  function setLocaleLintIgnored(list) {
+    try { root.localStorage?.setItem(localeLintIgnoreKey(), JSON.stringify([...new Set(list.filter(Boolean))])); } catch {}
+    STATE.localeLintKey = '';
+    runLocaleLintFromCache();
+    if (document.getElementById(IDS.localeLintPopover)) renderLocaleLintPopover(true);
+  }
+
+  /** Куски текста ошибки, по которым её искать в коде: целиком, начало, первые слова, длинное слово. */
+  function issueNeedles(item) {
+    const full = String(item.text || item.sample || '').replace(/…$/, '').replace(/\s+/g, ' ').trim();
+    const words = full.split(' ').filter(Boolean);
+    const longest = [...words].sort((a, b) => b.length - a.length)[0] || '';
+    return [...new Set([full, full.slice(0, 40), words.slice(0, 6).join(' '), words.slice(0, 3).join(' '), longest])]
+      .filter((needle) => needle && needle.length >= 3);
+  }
+
+  /** Клик по ошибке: открыть локаль, выделить место в коде и показать его в превью. */
+  async function revealLocaleIssue(item) {
+    const target = String(item.locale).toUpperCase();
+    try {
+      if (target !== currentBridgeLocale()) {
+        const flush = await flushBeforeLocaleSwitch();
+        if (flush && flush.ok === false) { status(flush.reason, 'error'); return; }
+        await Promise.resolve(multiLocaleBridge()?.switchLocale?.(target, { preferNative: true, rebind: true }));
+        await sleep(350);
+      }
+      const editor = STATE.overlayEditor;
+      const source = editor?.getValue?.() || '';
+      const needles = issueNeedles(item);
+      let found = null;
+      for (const needle of needles) {
+        const variants = [needle, needle.replace(/ /g, '&nbsp;'), needle.replace(/&/g, '&amp;')];
+        for (const variant of variants) {
+          const index = source.indexOf(variant);
+          if (index !== -1) { found = { index, needle: variant }; break; }
+        }
+        if (found) break;
+      }
+      if (editor && found) {
+        const from = editor.posFromIndex(found.index);
+        const to = editor.posFromIndex(found.index + found.needle.length);
+        updateSearchHighlights(found.needle, found.index);
+        editor.setSelection(from, to);
+        editor.scrollIntoView({ from, to }, 140);
+      }
+      // Превью: самый маленький элемент, где есть этот текст.
+      const doc = document.getElementById(IDS.previewFrame)?.contentDocument;
+      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      let best = null;
+      if (doc) {
+        for (const needle of needles.map(norm)) {
+          for (const el of doc.querySelectorAll('p,td,span,a,b,strong,h1,h2,h3,h4,li,div')) {
+            const text = norm(el.textContent);
+            if (text.includes(needle) && (!best || text.length < norm(best.textContent).length)) best = el;
+          }
+          if (best) break;
+        }
+      }
+      if (best) {
+        best.scrollIntoView({ block: 'center' });
+        const before = best.style.outline;
+        best.style.outline = '3px solid #ff4d5a';
+        setTimeout(() => { best.style.outline = before; }, 2600);
+      }
+      status(found || best ? `${target}: ${item.code} — показано в коде и в превью` : `${target}: место не нашлось — текст «${item.sample || ''}»`, found || best ? 'ok' : 'warn');
+    } catch (error) { status(`Could not open ${target}: ${error?.message || error}`, 'error'); }
+  }
+
   function renderLocaleLintPopover(forceOpen = false) {
     const existing = document.getElementById(IDS.localeLintPopover);
     if (existing && !forceOpen) { existing.remove(); return; }
@@ -3998,20 +4073,25 @@
       const where = document.createElement('span');
       where.className = 'rk-issue-line';
       where.textContent = String(item.locale);
-      row.append(dot, text, where);
-      row.addEventListener('click', async () => {
-        const target = String(item.locale).toUpperCase();
-        try {
-          if (target !== currentBridgeLocale()) {
-            const flush = await flushBeforeLocaleSwitch();
-            if (flush && flush.ok === false) { status(flush.reason, 'error'); return; }
-            await Promise.resolve(multiLocaleBridge()?.switchLocale?.(target, { preferNative: true, rebind: true }));
-          }
-          const needle = String(item.sample || '').replace(/…$/, '');
-          if (needle) updateSearchHighlights(needle, 0);
-        } catch (error) { status(`Could not open ${target}: ${error?.message || error}`, 'error'); }
+      const ignore = document.createElement('span');
+      ignore.className = 'rk-lint-ignore';
+      ignore.textContent = '☐ игнор';
+      ignore.title = 'Это не ошибка — скрыть этот случай во всех локалях этого письма';
+      ignore.addEventListener('click', (event) => {
+        event.stopPropagation();
+        setLocaleLintIgnored([...localeLintIgnored(), item.key]);
+        status('Скрыто во всех локалях этого письма. Вернуть — «Показать скрытые» внизу списка', 'ok');
       });
+      row.append(dot, text, where, ignore);
+      row.addEventListener('click', () => { void revealLocaleIssue(item); });
       pop.appendChild(row);
+    }
+    if (result?.ignored) {
+      const hidden = document.createElement('div');
+      hidden.className = 'rk-lint-summary';
+      hidden.append(document.createTextNode(`Скрыто как «не ошибка»: ${result.ignored}. `));
+      hidden.appendChild(makeButton('Показать скрытые', () => setLocaleLintIgnored([]), { title: 'Вернуть все скрытые случаи этого письма' }));
+      pop.appendChild(hidden);
     }
     document.body.appendChild(pop);
   }
@@ -4082,7 +4162,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.10.5 loaded');
+    console.log('[RetKit] MoEngage workspace v0.10.6 loaded');
   }
 
   boot();

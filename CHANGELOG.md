@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.6
+
+- 🌐 Locales: click an issue — RetKit opens that locale, selects the place in the code and shows it in the preview.
+- «☐ игнор» on an issue: not an error — the same case is hidden in every locale of this email (“Показать скрытые” brings them back).
+
 ## 0.10.5
 
 - Locale check: promo codes and codes with digits (SECURE5, BONUS100) are the same in every language — “Promocode: SECURE5” is no longer “untranslated” in every locale.

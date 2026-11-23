@@ -277,9 +277,16 @@
 
   // ---------- checks ----------
 
+  /**
+   * key — один и тот же случай во всех локалях: код проверки + сам текст
+   * (без пробелов и регистра). «Игнорировать» по key скрывает его везде.
+   * Без текста (вся локаль) — код + локаль + сообщение.
+   */
   function issue(locale, block, code, severity, message, text) {
     const out = { locale, block, code, severity, message };
-    if (text !== undefined && text !== null && String(text).trim()) out.sample = sample(text);
+    const hasText = text !== undefined && text !== null && String(text).trim();
+    if (hasText) { out.sample = sample(text); out.text = String(text); }
+    out.key = hasText ? `${code}|${norm(text).slice(0, 300)}` : `${code}|${locale}|${message}`;
     return out;
   }
 
@@ -328,7 +335,9 @@
   /**
    * @param {{locales: Record<string,string[]|object>, refCode?: string, mode?: 'txt'|'html', keep?: string[]}} opts
    */
-  function lint({ locales = {}, refCode, mode = 'txt', keep } = {}) {
+  function lint({ locales = {}, refCode, mode = 'txt', keep, ignore } = {}) {
+    const ignored = new Set(Array.isArray(ignore) ? ignore : []);
+    let ignoredCount = 0;
     const codes = Object.keys(locales || {}).filter((c) => locales[c] && typeof locales[c] === 'object');
     if (!codes.length) return { ok: true, version: VERSION, refCode: null, locales: {}, issues: [], summary: 'нет локалей' };
     const ref = pickRef(codes, refCode);
@@ -481,6 +490,12 @@
         if (!info?.script) perLocale[code] = { note: 'язык локали не известен — проверены только структура, мусор и непереведённое' };
       }
 
+      if (ignored.size) {
+        const kept = found.filter((x) => !ignored.has(x.key));
+        ignoredCount += found.length - kept.length;
+        found.length = 0;
+        found.push(...kept);
+      }
       const errors = found.filter((x) => x.severity === 'error').length;
       const warnings = found.length - errors;
       perLocale[code] = {
@@ -493,7 +508,7 @@
       issues.push(...found);
     }
 
-    const result = { ok: !issues.some((x) => x.severity === 'error'), version: VERSION, mode, refCode: ref, refBlocks: refBlocks.length, locales: perLocale, issues };
+    const result = { ok: !issues.some((x) => x.severity === 'error'), version: VERSION, mode, refCode: ref, refBlocks: refBlocks.length, locales: perLocale, issues, ...(ignoredCount ? { ignored: ignoredCount } : {}) };
     result.summary = summaryLine(result);
     return result;
   }
@@ -543,10 +558,10 @@
       .filter((t) => /\p{L}/u.test(t) || /\{\{|\{%/.test(t));
   }
 
-  function lintHtml({ htmlByLocale = {}, refCode, keep } = {}) {
+  function lintHtml({ htmlByLocale = {}, refCode, keep, ignore } = {}) {
     const locales = {};
     for (const [code, html] of Object.entries(htmlByLocale || {})) locales[code] = textsFromHtml(html);
-    return lint({ locales, refCode, mode: 'html', keep });
+    return lint({ locales, refCode, mode: 'html', keep, ignore });
   }
 
   // ---------- output ----------
@@ -557,7 +572,7 @@
       if (s.reference) { parts.push(`${code}${s.errors ? ` 🔴${s.errors}` : ''}${s.warnings ? ` 🟡${s.warnings}` : ''} (эталон)`); continue; }
       parts.push(s.status === 'ok' ? `${code} ✓` : `${code}${s.errors ? ` 🔴${s.errors}` : ''}${s.warnings ? ` 🟡${s.warnings}` : ''}`);
     }
-    return parts.join(' · ');
+    return parts.join(' · ') + (result.ignored ? ` · скрыто ${result.ignored}` : '');
   }
 
   /** Compact text for agents: one summary line, then one line per issue. */
