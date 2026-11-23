@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit for MoEngage
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.11.0
+// @version      0.11.1
 // @description  RetKit workspace with native MoEngage locale tabs, RTL and Test Campaign bridge.
 // @match        https://dashboard-02.moengage.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-moengage.user.js
@@ -3324,7 +3324,7 @@
     bar.className = 'rk-topbar';
     const brand = document.createElement('div');
     brand.className = 'rk-brand';
-    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.0</span>';
+    brand.innerHTML = '<span class="rk-mark">RK</span><span>RetKit × MoEngage</span><span class="rk-version">v0.11.1</span>';
     const wrapBtn = makeButton('Wrap', () => {
       STATE.wrap = !STATE.wrap;
       localStorage.setItem('retkit-mo-wrap', String(STATE.wrap));
@@ -3349,7 +3349,7 @@
     workspace.appendChild(bar);
     try {
       root.__RetKitDiagnostics?.ensureUi?.(workspace, {
-        version: '0.11.0',
+        version: '0.11.1',
         getHtml: () => STATE.overlayEditor?.getValue?.() || STATE.nativeEditor?.getValue?.() || '',
       });
     } catch {}
@@ -4930,7 +4930,7 @@
     root.addEventListener?.('beforeunload', () => {
       if (STATE.launcherTimer) root.clearInterval?.(STATE.launcherTimer);
     }, { once: true });
-    console.log('[RetKit] MoEngage workspace v0.11.0 loaded');
+    console.log('[RetKit] MoEngage workspace v0.11.1 loaded');
   }
 
   boot();
@@ -7327,7 +7327,7 @@ module.exports = { isRtlLocale, applyRtl };
         const hello = protocol.makeClientMessage('hello', {
           workspaceId,
           page: String(root.location?.href || ''),
-          clientVersion: '0.11.0',
+          clientVersion: '0.11.1',
         });
         socket.send(JSON.stringify(hello));
       });
@@ -7734,11 +7734,11 @@ module.exports = { isRtlLocale, applyRtl };
 
   function status() {
     const l = link();
-    if (!l) return { linkInstalled: false, online: false, line: 'UCC: мост не установлен (скрипт RetKit UCC Export 0.2+)' };
-    const p = l.presence();
-    const line = !p.online ? 'UCC: вкладка не на связи'
-      : (p.id ? `UCC: ${p.name || `письмо ${p.id}`}${p.microservice ? ` (${p.microservice})` : ''}, локалей ${p.locales || '?'}` : 'UCC: на связи, письмо не открыто');
-    return { linkInstalled: true, ...p, ready: Boolean(p.online && p.id), line };
+    if (!l) return { linkInstalled: false, online: false, ready: false, tabs: [], line: 'UCC: мост не установлен (скрипт RetKit UCC Export 0.3+)' };
+    const tabs = typeof l.tabs === 'function' ? l.tabs() : (l.presence().id ? [l.presence()] : []);
+    const label = (t) => `${t.name || `письмо ${t.id}`}${t.microservice ? ` (${t.microservice})` : ''}${/\.int\./.test(t.host || '') ? ' · INT' : ''}`;
+    const line = !tabs.length ? 'UCC: открытых писем нет' : (tabs.length === 1 ? `UCC: ${label(tabs[0])}, локалей ${tabs[0].locales || '?'}` : `UCC: открыто писем ${tabs.length} — выберите в ⇄ UCC`);
+    return { linkInstalled: true, online: tabs.length > 0, ready: tabs.length > 0, tabs: tabs.map((t) => ({ ...t, label: label(t) })), id: tabs[0]?.id || null, name: tabs[0]?.name || '', host: tabs[0]?.host || '', line };
   }
 
   async function plan(transfer) {
@@ -7871,8 +7871,20 @@ module.exports = { isRtlLocale, applyRtl };
       if (!transfer) {
         const s = status();
         if (!s.ready) throw new Error(`${s.line}. Откройте письмо в UCC в соседней вкладке.`);
-        line(body, `Забираю из UCC: ${s.name || s.id}…`, 'muted');
-        transfer = await link().pull({ id: s.id });
+        let pick = s.tabs[0];
+        if (s.tabs.length > 1) {
+          pick = await new Promise((resolve) => {
+            line(body, 'В UCC открыто несколько писем — какое переносим?', 'info');
+            for (const t of s.tabs) {
+              const b = el('button', { ...BTN, background: '#1e293b', display: 'block', width: '100%', textAlign: 'left', marginTop: '6px', font: '500 12px/1.3 sans-serif' }, t.label);
+              b.addEventListener('click', () => resolve(t));
+              body.appendChild(b);
+            }
+          });
+          body.textContent = '';
+        }
+        line(body, `Забираю из UCC: ${pick.label}…`, 'muted');
+        transfer = await link().pull({ id: pick.id, host: pick.host });
         body.textContent = '';
       }
       const pl = await plan(transfer);
@@ -7921,9 +7933,9 @@ module.exports = { isRtlLocale, applyRtl };
     const b = boundButton;
     if (!b || !b.isConnected) return;
     const s = status();
-    const color = !s.linkInstalled ? '#64748b' : (s.ready ? '#22c55e' : (s.online ? '#f59e0b' : '#64748b'));
+    const color = !s.linkInstalled ? '#64748b' : (s.tabs.length === 1 ? '#22c55e' : (s.tabs.length > 1 ? '#f59e0b' : '#64748b'));
     b.textContent = '';
-    b.append(el('span', { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: color, marginRight: '6px' }), root.document.createTextNode('⇄ UCC'));
+    b.append(el('span', { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: color, marginRight: '6px' }), root.document.createTextNode(s.tabs.length > 1 ? `⇄ UCC (${s.tabs.length})` : '⇄ UCC'));
     b.title = `${s.line}\nНажмите, чтобы перенести открытое в UCC письмо сюда (HTML + Subject всех локалей).`;
   }
   function bindButton(button) { boundButton = button; paint(); }
@@ -7946,8 +7958,10 @@ module.exports = { isRtlLocale, applyRtl };
     async agent({ apply: doApply = false, applySender = false, id } = {}) {
       const s = status();
       if (!s.linkInstalled) throw new Error(s.line);
-      if (!s.ready && !id) throw new Error(`${s.line}. Попросите открыть письмо в UCC.`);
-      const transfer = await link().pull({ id: id || s.id });
+      if (!s.ready) throw new Error(`${s.line}. Попросите открыть письмо в UCC.`);
+      if (!id && s.tabs.length > 1) return { choose: s.tabs.map((t) => ({ id: t.id, host: t.host, label: t.label })), note: 'Открыто несколько писем UCC — повторите с id.' };
+      const t = s.tabs.find((x) => String(x.id) === String(id || s.id)) || s.tabs[0];
+      const transfer = await link().pull({ id: t.id, host: t.host });
       if (!doApply) return { plan: await plan(transfer), note: 'Это план. Перенос — тот же вызов с apply: true (после согласия человека).' };
       return apply(transfer, { applySender });
     },
@@ -10474,7 +10488,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (obsolete.includes(textOf(button))) button.remove();
     }
     const version = bar.querySelector('.rk-version');
-    setTextContentIfChanged(version, 'v0.11.0');
+    setTextContentIfChanged(version, 'v0.11.1');
     return true;
   }
 
@@ -14223,7 +14237,7 @@ module.exports = { isRtlLocale, applyRtl };
     const api = originalsApi();
     if (!api || api.store) return;
     try {
-      api.store = api.createStore({ version: '0.11.0' }); // version: scripts/version-files.mjs
+      api.store = api.createStore({ version: '0.11.1' }); // version: scripts/version-files.mjs
       api.contextProvider = currentOriginalContext;
       api.onChange = () => refreshOriginalButton(true);
       api.store.prune().catch(() => {});
@@ -14249,7 +14263,7 @@ module.exports = { isRtlLocale, applyRtl };
       if (localeTimer) clearInterval(localeTimer);
       if (subjectTimer) clearTimeout(subjectTimer);
     });
-    console.log('[RetKit] MoEngage bridge v0.11.0 loaded');
+    console.log('[RetKit] MoEngage bridge v0.11.1 loaded');
   }
 
   bootBridge();

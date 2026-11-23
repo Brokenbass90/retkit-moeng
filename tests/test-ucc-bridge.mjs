@@ -17,6 +17,8 @@ function gmFor(tab) {
     GM_getValue: (k, d) => (k in store ? JSON.parse(JSON.stringify(store[k])) : d),
     GM_setValue: (k, v) => { store[k] = JSON.parse(JSON.stringify(v)); for (const l of listeners) if (l.k === k) setTimeout(() => l.fn(k, null, JSON.parse(JSON.stringify(v)), l.tab !== tab), 0); },
     GM_addValueChangeListener: (k, fn) => { listeners.push({ k, fn, tab }); },
+    GM_listValues: () => Object.keys(store),
+    GM_deleteValue: (k) => { delete store[k]; },
   };
 }
 function fakeDom() {
@@ -67,8 +69,10 @@ assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-export'), 'кнопка
 assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-push'), 'кнопка → MoEngage');
 await tick(); await tick();
 for (const f of ucc.timers) await f();
-assert.equal(store['retkit.ucc.presence'].name, '2fa-code');
-assert.equal(store['retkit.ucc.presence'].microservice, 'auth');
+const presence = Object.entries(store).filter(([k]) => k.startsWith('retkit.ucc.presence.')).map(([, v]) => v);
+assert.equal(presence.length, 1);
+assert.equal(presence[0].name, '2fa-code');
+assert.equal(presence[0].microservice, 'auth');
 
 // 2. Задание: футер, локали, Default из EN, пропуски, без JWT
 const mail = await exp.collect(15928);
@@ -101,14 +105,27 @@ vm.runInContext(importSrc, mo.sandbox);
 const imp = mo.sandbox.__RetKitUccImport;
 const st = imp.status();
 assert.equal(st.ready, true, st.line);
-assert.match(st.line, /2fa-code \(auth\)/);
+assert.match(st.line, /2fa-code \(auth\) · INT/);
 
 const planned = await imp.agent({});
 assert.deepEqual([...planned.plan.missing], ['pt_PT']);
 assert.equal(planned.plan.senderDiffers, true);
 assert.deepEqual(locales, ['EN', 'EN_US'], 'план ничего не меняет');
 
-const done = await imp.agent({ apply: true, applySender: true });
+// Вторая вкладка UCC с другим письмом: агенту предлагают выбрать, по id берётся нужное.
+responses['/api/email/templates/777'] = { ...tpl, id: 777, name: 'mail-changing_email', microservice_name: 'core' };
+const ucc2 = tab('ucc.int.iqoption.com', '/email-templates/777/edit', { fetch });
+await tick(); await tick();
+for (const f of ucc2.timers) await f();
+const two = imp.status();
+assert.equal(two.tabs.length, 2, two.line);
+assert.match(two.line, /открыто писем 2/);
+const choose = await imp.agent({});
+assert.equal(choose.choose.length, 2);
+const picked = await imp.agent({ id: 777 });
+assert.equal(picked.plan.name, 'mail-changing_email');
+
+const done = await imp.agent({ apply: true, applySender: true, id: 15928 });
 assert.equal(done.ok, true, done.lines.join('\n'));
 assert.equal(done.written, 3);
 assert.deepEqual(locales, ['EN', 'EN_US', 'PT_PT']);
@@ -122,7 +139,7 @@ assert.ok(calls.every((m) => m === 'GET'), 'в UCC только GET');
 
 // 4. Ошибка одной локали не останавливает остальные
 bridgeApi.setLocaleHtmlStable = async () => (active === 'PT_PT' ? { ok: false, reason: 'MoEngage did not keep the HTML' } : { ok: true });
-const partial = await imp.agent({ apply: true });
+const partial = await imp.agent({ apply: true, id: 15928 });
 assert.equal(partial.written, 2);
 assert.equal(partial.failed, 1);
 assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not keep')));

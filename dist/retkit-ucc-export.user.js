@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.2.0
+// @version      0.3.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -11,6 +11,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_listValues
+// @grant        GM_deleteValue
 // @grant        unsafeWindow
 // @sandbox      JavaScript
 // @run-at       document-idle
@@ -266,19 +268,24 @@
     };
   }
 
-  const KEY = { presence: 'retkit.ucc.presence', pull: 'retkit.ucc.pull', reply: 'retkit.ucc.reply', push: 'retkit.ucc.push' };
+  const KEY = { pull: 'retkit.ucc.pull', reply: 'retkit.ucc.reply', push: 'retkit.ucc.push' };
   const gm = {
     get: (k, d) => { try { return GM_getValue(k, d); } catch { return d; } },
     set: (k, v) => { try { GM_setValue(k, v); return true; } catch { return false; } },
     on: (k, fn) => { try { GM_addValueChangeListener(k, (_n, _o, v, remote) => fn(v, remote)); return true; } catch { return false; } },
+    keys: () => { try { return GM_listValues(); } catch { return []; } },
+    del: (k) => { try { GM_deleteValue(k); } catch {} },
   };
+  // Каждая вкладка UCC пишет своё присутствие в свой ключ: открыто несколько писем — видны все.
+  const TAB = Math.random().toString(36).slice(2, 10);
+  const PRESENCE_PREFIX = 'retkit.ucc.presence.';
   const now = () => Date.now();
 
   function uccLink() {
     const metaCache = new Map(); // id → { name, microservice }
     async function heartbeat() {
       const id = templateId();
-      if (!id) { gm.set(KEY.presence, { ts: now(), host: location.host, id: null }); return; }
+      if (!id) { gm.set(PRESENCE_PREFIX + TAB, { ts: now(), tab: TAB, host: location.host, id: null }); return; }
       let meta = metaCache.get(id);
       if (!meta) {
         meta = { name: '', microservice: '' };
@@ -288,12 +295,12 @@
           meta.locales = (tpl.locales || []).length;
         }).catch(() => metaCache.delete(id));
       }
-      gm.set(KEY.presence, { ts: now(), host: location.host, id, name: meta.name, microservice: meta.microservice, locales: meta.locales || 0 });
+      gm.set(PRESENCE_PREFIX + TAB, { ts: now(), tab: TAB, host: location.host, id, name: meta.name, microservice: meta.microservice, locales: meta.locales || 0 });
     }
     gm.on(KEY.pull, async (req, remote) => {
       if (!remote || !req?.requestId || now() - (req.ts || 0) > 60000) return;
       const id = templateId();
-      if (!id || (req.id && String(req.id) !== String(id))) return; // спрашивают не про наше письмо
+      if (!id || (req.id && String(req.id) !== String(id)) || (req.host && req.host !== location.host)) return; // спрашивают не про наше письмо
       try {
         const mail = await collect(id);
         gm.set(KEY.reply, { requestId: req.requestId, ts: now(), transfer: transferFor(mail) });
@@ -303,6 +310,7 @@
     });
     heartbeat();
     setInterval(heartbeat, 2000);
+    try { W.addEventListener('pagehide', () => gm.del(PRESENCE_PREFIX + TAB)); } catch {}
 
     // Кнопка «→ MoEngage»: то же, но по инициативе UCC — RetKit в MoEngage откроет окно переноса.
     const PUSH_ID = 'retkit-ucc-push';
@@ -343,23 +351,45 @@
     const listeners = { presence: new Set(), push: new Set() };
     const pending = new Map();
     gm.on(KEY.reply, (r) => { const p = pending.get(r?.requestId); if (p) { pending.delete(r.requestId); r.error ? p.reject(new Error(r.error)) : p.resolve(r.transfer); } });
-    gm.on(KEY.presence, (p) => { for (const fn of listeners.presence) { try { fn(p); } catch {} } });
+    function tabs() {
+      const list = [];
+      for (const k of gm.keys()) {
+        if (!String(k).startsWith(PRESENCE_PREFIX)) continue;
+        const p = gm.get(k, null);
+        const ageMs = p ? now() - (p.ts || 0) : Infinity;
+        if (ageMs > 60000) { gm.del(k); continue; } // вкладку закрыли без pagehide
+        if (ageMs < 6000 && p.id) list.push({ id: p.id, name: p.name || '', microservice: p.microservice || '', locales: p.locales || 0, host: p.host || '', tab: p.tab, ageMs });
+      }
+      // одно письмо в двух вкладках — одна строка
+      const seen = new Set();
+      return list.filter((x) => (seen.has(`${x.host}#${x.id}`) ? false : seen.add(`${x.host}#${x.id}`))).sort((a, b) => a.name.localeCompare(b.name));
+    }
+    let lastSig = '';
+    setInterval(() => {
+      const list = tabs();
+      const sig = JSON.stringify(list.map((x) => [x.host, x.id, x.name]));
+      if (sig === lastSig) return;
+      lastSig = sig;
+      for (const fn of listeners.presence) { try { fn(list); } catch {} }
+    }, 2000);
     gm.on(KEY.push, (req, remote) => { if (remote && req?.transfer) for (const fn of listeners.push) { try { fn(req); } catch {} } });
     W.__RetKitUccLink = {
-      version: '0.2.0',
-      /** Что открыто в UCC: { online, id, name, microservice, locales, host, ageMs }. */
+      version: '0.3.0',
+      /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
+      tabs,
+      /** Совместимость: первое открытое письмо. */
       presence() {
-        const p = gm.get(KEY.presence, null);
-        const ageMs = p ? now() - (p.ts || 0) : Infinity;
-        return { online: ageMs < 6000, ageMs, id: p?.id || null, name: p?.name || '', microservice: p?.microservice || '', locales: p?.locales || 0, host: p?.host || '' };
+        const list = tabs();
+        const p = list[0];
+        return { online: list.length > 0, count: list.length, id: p?.id || null, name: p?.name || '', microservice: p?.microservice || '', locales: p?.locales || 0, host: p?.host || '' };
       },
       /** Забрать задание переноса из открытой вкладки UCC. */
-      pull({ id, timeoutMs = 20000 } = {}) {
+      pull({ id, host, timeoutMs = 20000 } = {}) {
         const requestId = `pull-${now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('UCC не ответил: откройте письмо в UCC (вкладка должна быть открыта)')); }, timeoutMs);
           pending.set(requestId, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
-          if (!gm.set(KEY.pull, { requestId, ts: now(), id: id || null })) { clearTimeout(timer); pending.delete(requestId); reject(new Error('Хранилище Tampermonkey недоступно')); }
+          if (!gm.set(KEY.pull, { requestId, ts: now(), id: id || null, host: host || null })) { clearTimeout(timer); pending.delete(requestId); reject(new Error('Хранилище Tampermonkey недоступно')); }
         });
       },
       onPresence(fn) { listeners.presence.add(fn); return () => listeners.presence.delete(fn); },
