@@ -91,17 +91,16 @@ assert.equal(t.senderEmail, 'noreply@iqoption.com');
 assert.ok(!JSON.stringify(t).includes('SECRET'), 'JWT не попадает в задание');
 
 // 3. Вкладка MoEngage: RetKit (фейк API) + мост; кнопка ⇄ UCC забирает письмо и переносит
-let active = 'EN'; let locales = ['EN', 'EN_US']; const htmls = {}; const subjects = {}; let senderApplied = null;
+let active = 'EN'; let locales = ['EN', 'EN_US']; const htmls = {}; const subjects = {}; let addCalls = 0;
 const bridgeApi = {
   listLocales: async () => [...locales],
-  addLocales: async (list) => { locales.push(...list.map((l) => l.toUpperCase())); return { ok: true }; },
+  addLocales: async () => { addCalls += 1; return { ok: true }; },
   getActiveLocale: () => active,
   switchLocale: async (l) => { active = /^default$/i.test(l) ? 'EN' : l.toUpperCase(); return true; },
   setLocaleHtmlStable: async (l, html) => { htmls[active] = html; return { ok: true }; },
   setSubject: (s) => { subjects[active] = s; return true; },
   getSubject: () => subjects[active] || '',
   readSender: () => ({ found: true, fromEmail: 'promo@iqoption.com', senderName: 'IQ' }),
-  applySender: async (v, list) => { senderApplied = { v, list: [...list] }; return list.map((locale) => ({ locale, ok: true })); },
 };
 const mo = tab('dashboard-02.moengage.com', '/v4/campaigns/x', { __RetKitMoEngageBridgeApi: bridgeApi, __RetKitMoEngageCore: { flushBeforeLocaleSwitch: () => ({ ok: true }), setMultiLocaleBusy() {} } });
 vm.runInContext(importSrc, mo.sandbox);
@@ -112,7 +111,6 @@ assert.match(st.line, /2fa-code · auth · INT/);
 
 const planned = await imp.agent({});
 assert.deepEqual([...planned.plan.missing], ['pt_PT']);
-assert.equal(planned.plan.senderDiffers, true);
 assert.deepEqual(locales, ['EN', 'EN_US'], 'план ничего не меняет');
 
 // Вторая вкладка UCC с другим письмом: агенту предлагают выбрать, по id берётся нужное.
@@ -128,17 +126,34 @@ assert.equal(choose.choose.length, 2);
 const picked = await imp.agent({ id: 777 });
 assert.equal(picked.plan.name, 'mail-changing_email');
 
-const done = await imp.agent({ apply: true, applySender: true, id: 15928 });
-assert.equal(done.ok, true, done.lines.join('\n'));
-assert.equal(done.written, 3);
-assert.deepEqual(locales, ['EN', 'EN_US', 'PT_PT']);
+// pt_PT нет в письме: мост локали НЕ создаёт, пишет только в существующие
+const done = await imp.agent({ apply: true, id: 15928 });
+assert.equal(addCalls, 0, 'локали через меню MoEngage не добавляются');
+assert.equal(done.written, 2, done.lines.join('\n'));
+assert.equal(done.failed, 1);
+assert.ok(done.results.some((r) => r.locale === 'pt_PT' && !r.ok));
+assert.deepEqual(locales, ['EN', 'EN_US']);
 assert.match(htmls.EN, /noreg_EN/);
-assert.match(htmls.PT_PT, /noreg_PT/);
+assert.match(htmls.EN, /data-msys-unsubscribe="1"[^>]*style="color: #[0-9a-f]{3,6};/, 'отписка цветом фона');
 assert.equal(subjects.EN_US, 'Your code');
-assert.equal(subjects.PT_PT, 'Seu código');
-assert.equal(senderApplied.v.fromEmail, 'noreply@iqoption.com');
 assert.equal(active, 'EN', 'вернулись на исходную локаль');
 assert.ok(calls.every((m) => m === 'GET'), 'в UCC только GET');
+
+// Есть все локали → всё переносится
+locales.push('PT_PT');
+const full = await imp.agent({ apply: true, id: 15928 });
+assert.equal(full.ok, true, full.lines.join('\n'));
+assert.equal(full.written, 3);
+assert.match(htmls.PT_PT, /noreg_PT/);
+assert.equal(subjects.PT_PT, 'Seu código');
+
+// Вкладка не переключилась → в чужую локаль не пишем
+const before = htmls.EN;
+bridgeApi.switchLocale = async () => true; // «переключилась», но active остаётся
+active = 'EN';
+const guard = await imp.agent({ apply: true, id: 15928 });
+assert.ok(guard.results.some((r) => r.locale === 'pt_PT' && !r.ok && /не открылась вкладка/.test(r.reason)));
+bridgeApi.switchLocale = async (l) => { active = /^default$/i.test(l) ? 'EN' : l.toUpperCase(); return true; };
 
 // 4. Ошибка одной локали не останавливает остальные
 bridgeApi.setLocaleHtmlStable = async () => (active === 'PT_PT' ? { ok: false, reason: 'MoEngage did not keep the HTML' } : { ok: true });

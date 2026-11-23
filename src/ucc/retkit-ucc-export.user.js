@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.6.1
+// @version      0.7.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -242,7 +242,7 @@
       '{{embedded.domain}}/traderoom/': 'https://iqbroker.co/lp/multilink/asset?aff=7&amp;afftrack=mail_system&amp;retrack=system',
     },
     moengageLocales: { en: 'en_US', ar: 'ar_KW', es: 'es_ES', pt: 'pt_PT', th: 'th_TH', id: 'id_ID', vi: 'vi_VN', fr: 'fr_FR' },
-    afterTerms: "<br><a data-msys-unsubscribe=\"1\" href=\"{{ContentBlock['iq_unsubscribe']}}\" style=\"color: #2ba6cb; text-decoration: none;\">Manage your preference here</a>",
+    afterTerms: "<br><a data-msys-unsubscribe=\"1\" href=\"{{ContentBlock['iq_unsubscribe']}}\" style=\"color: {BG}; text-decoration: none;\">Manage your preference here</a>",
   };
   const PLACEHOLDER_RE = /\{\{\s*[^{}]+?\s*\}\}/g;
 
@@ -256,13 +256,20 @@
   /** Отписка MoEngage — в самый низ футера: сразу после ссылки Terms (или перед </body>). Повторно не вставляется. */
   function addAfterTerms(html) {
     if (!MAP.afterTerms || html.includes("iq_unsubscribe")) return html;
+    const snippet = MAP.afterTerms.split('{BG}').join(footerBg(html));
     const at = html.indexOf("iq_terms_noreg_url");
     const close = at >= 0 ? html.indexOf('</a>', at) : -1;
-    if (close >= 0) return html.slice(0, close + 4) + MAP.afterTerms + html.slice(close + 4);
+    if (close >= 0) return html.slice(0, close + 4) + snippet + html.slice(close + 4);
     const body = html.lastIndexOf('</body>');
-    return body >= 0 ? html.slice(0, body) + MAP.afterTerms + html.slice(body) : html + MAP.afterTerms;
+    return body >= 0 ? html.slice(0, body) + snippet + html.slice(body) : html + snippet;
   }
-
+  /** Цвет фона футера (последний background до адреса/Terms) — ссылкой этого цвета отписка «спрятана». */
+  function footerBg(html) {
+    const anchor = Math.max(html.indexOf("iq_company_address_text"), html.indexOf("iq_terms_noreg_url"));
+    const part = anchor > 0 ? html.slice(0, anchor) : html;
+    const all = [...part.matchAll(/background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,6})\b/g)].map((m) => m[1].toLowerCase()).filter((c) => !/^#f{3}(f{3})?$/.test(c));
+    return all.length ? all[all.length - 1] : '#ebeff6';
+  }
   /** Письмо (результат collect) → задание для MoEngage. */
   function transferFor(mail, { defaultFromEn = true } = {}) {
     const locales = []; const skipped = []; const empty = []; const placeholders = {};
@@ -286,7 +293,7 @@
     };
   }
 
-  const KEY = { pull: 'retkit.ucc.pull', reply: 'retkit.ucc.reply', push: 'retkit.ucc.push' };
+  const KEY = { pull: 'retkit.ucc.pull', reply: 'retkit.ucc.reply', push: 'retkit.ucc.push', status: 'retkit.ucc.status' };
   const gm = {
     get: (k, d) => { try { return GM_getValue(k, d); } catch { return d; } },
     set: (k, v) => { try { GM_setValue(k, v); return true; } catch { return false; } },
@@ -336,8 +343,10 @@
     try { document.addEventListener('visibilitychange', heartbeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(PRESENCE_PREFIX + TAB)); } catch {}
 
-    // Индикатор моста: к какой вкладке MoEngage натянут. Перенос запускается в RetKit (MoEngage).
+    // Кнопка моста в UCC: показывает, какие письма MoEngage открыты, и запускает перенос в выбранное.
     const PILL_ID = 'retkit-ucc-pill';
+    const MENU_ID = 'retkit-ucc-menu';
+    let activeRequest = '';
     function moTabs() {
       const list = [];
       for (const k of gm.keys()) {
@@ -349,31 +358,71 @@
       }
       return list;
     }
+    const moLabel = (t) => `${t.title || 'письмо MoEngage'}${t.campaign ? ` · …${String(t.campaign).slice(-4)}` : ''}`;
+    function el2(tag, css, text) { const n = document.createElement(tag); if (css) n.style.cssText = css; if (text != null) n.textContent = text; return n; }
+
+    function openMenu() {
+      document.getElementById(MENU_ID)?.remove();
+      const tabs = moTabs();
+      const menu = el2('div', 'position:fixed;right:20px;bottom:112px;z-index:99999;width:360px;max-height:60vh;overflow:auto;background:#0f1722;color:#e6edf7;border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);font:12px/1.45 sans-serif;padding:12px 14px');
+      menu.id = MENU_ID;
+      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:13px;margin-bottom:8px', 'Перенос в MoEngage');
+      const x = el2('button', 'background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer', '×'); x.onclick = () => menu.remove(); head.append(x);
+      menu.append(head);
+      if (!tabs.length) {
+        menu.append(el2('div', 'color:#fbbf24', 'Нет открытых писем MoEngage. Откройте письмо в MoEngage (шаг контента) — оно появится здесь.'));
+      } else {
+        menu.append(el2('div', 'color:#7d8ba1;font-size:11px;text-transform:uppercase;margin:4px 0', 'Куда перенести'));
+        for (const t of tabs) {
+          const b = el2('button', 'display:block;width:100%;text-align:left;background:#152030;border:1px solid #243246;color:#e6edf7;border-radius:9px;padding:8px 10px;margin-bottom:6px;cursor:pointer;font:inherit');
+          b.append(el2('b', '', moLabel(t)), el2('span', 'color:#8a98ad;margin-left:6px', t.locales?.length ? `${t.locales.length} лок.: ${t.locales.join(', ')}` : ''));
+          b.onclick = () => send(t, menu);
+          menu.append(b);
+        }
+      }
+      document.body.appendChild(menu);
+    }
+
+    async function send(target, menu) {
+      const out = el2('div', 'margin-top:8px;color:#cbd5e1;white-space:pre-wrap', 'Читаю письмо UCC…');
+      menu.append(out);
+      try {
+        const mail = await collect(templateId());
+        activeRequest = `push-${mail.id}-${now().toString(36)}`;
+        gm.set(KEY.push, { requestId: activeRequest, ts: now(), targetTab: target.tab, auto: true, transfer: transferFor(mail) });
+        out.textContent = `Отправлено в «${moLabel(target)}» — переношу…`;
+      } catch (error) {
+        out.textContent = `Ошибка: ${error?.message || error}`;
+        out.style.color = '#fecaca';
+      }
+    }
+    gm.on(KEY.status, (st) => {
+      if (!st || st.requestId !== activeRequest) return;
+      const menu = document.getElementById(MENU_ID);
+      const out = menu?.lastElementChild;
+      if (!out) return;
+      if (st.state === 'running') out.textContent = `Переношу… ${st.done || 0}/${st.total || '?'}${st.last ? `\n${st.last}` : ''}`;
+      if (st.state === 'done') { out.textContent = st.failed ? `Перенесено ${st.ok}, ошибок ${st.failed} — подробности в окне RetKit (MoEngage)` : `✓ Перенесено ${st.ok} лок. Сохраните кампанию в MoEngage.`; out.style.color = st.failed ? '#fbbf24' : '#86efac'; }
+      if (st.state === 'error') { out.textContent = `✕ ${st.error || 'ошибка'}`; out.style.color = '#fecaca'; }
+    });
+
     function syncPill() {
       const id = templateId();
       let pill = document.getElementById(PILL_ID);
-      if (!id) { pill?.remove(); return; }
+      if (!id) { pill?.remove(); document.getElementById(MENU_ID)?.remove(); return; }
       if (!pill) {
-        pill = document.createElement('div');
-        pill.id = PILL_ID;
-        Object.assign(pill.style, {
-          position: 'fixed', right: '20px', bottom: '64px', zIndex: 99999, padding: '8px 12px', borderRadius: '999px',
-          background: '#0f1722', color: '#e6edf7', font: '600 12px/1 sans-serif', boxShadow: '0 4px 14px rgba(0,0,0,.25)',
-          display: 'flex', alignItems: 'center', gap: '7px', maxWidth: '360px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        });
+        pill = el2('button', 'position:fixed;right:20px;bottom:64px;z-index:99999;padding:9px 14px;border-radius:999px;border:0;font:600 13px/1 sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);display:flex;align-items:center;gap:7px;cursor:pointer;max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
+        pill.id = PILL_ID; pill.type = 'button';
+        pill.onclick = () => (document.getElementById(MENU_ID) ? document.getElementById(MENU_ID).remove() : openMenu());
         document.body.appendChild(pill);
       }
       const tabs = moTabs();
-      const dot = tabs.length ? '#22c55e' : '#64748b';
-      const text = !tabs.length ? 'MoEngage: откройте письмо и RetKit' : `на связи с MoEngage${tabs.length > 1 ? ` (${tabs.length} вкладки)` : ''} — перенос: RetKit → «Перенести из UCC»`;
-      pill.innerHTML = '';
-      const d = document.createElement('span');
-      Object.assign(d.style, { width: '8px', height: '8px', borderRadius: '50%', background: dot, flex: '0 0 8px' });
-      const t = document.createElement('span'); t.textContent = `⇄ ${text}`;
-      pill.append(d, t);
-      pill.title = tabs.length
-        ? `Мост RetKit на связи с:\n${tabs.map((x) => `• ${x.title || x.path}`).join('\n')}\nПеренос: в MoEngage → RetKit → чип «UCC».`
-        : 'Откройте письмо в MoEngage и RetKit — мост появится здесь.';
+      pill.style.background = tabs.length ? '#15803d' : '#0f1722';
+      pill.style.color = '#fff';
+      pill.textContent = '';
+      const d = el2('span', `width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:${tabs.length ? '#4ade80' : '#64748b'}`);
+      pill.append(d, document.createTextNode(!tabs.length ? 'MoEngage: письмо не открыто' : (tabs.length === 1 ? `→ MoEngage: ${moLabel(tabs[0])}` : `→ MoEngage: ${tabs.length} письма`)));
+      pill.title = tabs.length ? 'Нажмите — выбрать письмо MoEngage и перенести туда' : 'Откройте письмо в MoEngage — мост появится здесь.';
     }
     syncPill();
     setInterval(syncPill, 2000);
@@ -404,26 +453,32 @@
       lastSig = sig;
       for (const fn of listeners.presence) { try { fn(list); } catch {} }
     }, 2000);
-    gm.on(KEY.push, (req, remote) => { if (remote && req?.transfer) for (const fn of listeners.push) { try { fn(req); } catch {} } });
+    gm.on(KEY.push, (req, remote) => { if (remote && req?.transfer && (!req.targetTab || req.targetTab === TAB)) for (const fn of listeners.push) { try { fn(req); } catch {} } });
     // Присутствие этой вкладки MoEngage — для индикатора в UCC.
     function moTitle() {
       const pick = (sel) => { try { return String(document.querySelector(sel)?.value || document.querySelector(sel)?.textContent || '').trim(); } catch { return ''; } };
       return pick('input[name*="campaign" i][name*="name" i]') || pick('[data-testid*="campaign-name" i]') || String(document.title || '').replace(/\s*[|·-]\s*MoEngage.*$/i, '').trim();
     }
+    let moLocales = []; let moLocalesAt = 0;
     function moBeat() {
-      // MoEngage меняет адрес через #, поэтому смотрим не на путь, а на вкладки локалей письма.
-      let locale = '';
-      try { locale = W.__RetKitMoEngageBridgeApi?.getNativeTabLocale?.() || ''; } catch {}
       // RetKit открыт (полноэкранный редактор письма) или видны вкладки локалей MoEngage.
-      const editor = (Boolean(document.getElementById('retkit-mo-workspace')) || Boolean(locale)) && !/settings/i.test(location.href);
-      gm.set(MO_PREFIX + TAB, { ts: now(), tab: TAB, title: moTitle(), path: location.pathname + location.hash, editor });
+      let locale = '';
+      const a = W.__RetKitMoEngageBridgeApi;
+      try { locale = a?.getNativeTabLocale?.() || ''; } catch {}
+      const editor = (Boolean(document.getElementById('retkit-mo-workspace')) || Boolean(locale)) && !/settings/i.test(String(location.href || ''));
+      if (editor && a?.listLocales && now() - moLocalesAt > 15000) {
+        moLocalesAt = now();
+        Promise.resolve(a.listLocales()).then((l) => { moLocales = Array.isArray(l) ? l.map(String) : []; }).catch(() => {});
+      }
+      const campaign = (String(location.href || '').match(/[0-9a-f]{24}/i) || [''])[0];
+      gm.set(MO_PREFIX + TAB, { ts: now(), tab: TAB, title: moTitle(), campaign, locales: moLocales, path: location.pathname + location.hash, editor });
     }
     moBeat();
     setInterval(moBeat, 2000);
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.6.1',
+      version: '0.7.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -443,6 +498,8 @@
       },
       onPresence(fn) { listeners.presence.add(fn); return () => listeners.presence.delete(fn); },
       onPush(fn) { listeners.push.add(fn); return () => listeners.push.delete(fn); },
+      /** Ход переноса, начатого из UCC, — кнопка UCC показывает его. */
+      reportStatus(requestId, patch) { gm.set(KEY.status, { ...patch, requestId, ts: now() }); },
     };
     try { W.dispatchEvent(new W.CustomEvent('retkit:ucc-link-ready')); } catch {}
   }

@@ -43,8 +43,11 @@ for (const l of tpl.locales || []) {
   for (const [from, to] of Object.entries(footerMap)) if (to) html = html.split(from).join(to.replaceAll('{LANG}', lang));
   if (mapFile.afterTerms && !html.includes('iq_unsubscribe')) {
     const at = html.indexOf('iq_terms_noreg_url'); const close = at >= 0 ? html.indexOf('</a>', at) : -1;
-    if (close >= 0) html = html.slice(0, close + 4) + mapFile.afterTerms + html.slice(close + 4);
-    else { const b = html.lastIndexOf('</body>'); html = b >= 0 ? html.slice(0, b) + mapFile.afterTerms + html.slice(b) : html + mapFile.afterTerms; }
+    const anchor = Math.max(html.indexOf('iq_company_address_text'), html.indexOf('iq_terms_noreg_url'));
+    const bgs = [...(anchor > 0 ? html.slice(0, anchor) : html).matchAll(/background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,6})\b/g)].map((m) => m[1].toLowerCase()).filter((c) => !/^#f{3}(f{3})?$/.test(c));
+    const snippet = mapFile.afterTerms.split('{BG}').join(bgs.length ? bgs[bgs.length - 1] : '#ebeff6');
+    if (close >= 0) html = html.slice(0, close + 4) + snippet + html.slice(close + 4);
+    else { const b = html.lastIndexOf('</body>'); html = b >= 0 ? html.slice(0, b) + snippet + html.slice(b) : html + snippet; }
   }
   const moLocale = moLocales[code] || '';
   if (!moLocale) report.noMoengageLocale.push(code);

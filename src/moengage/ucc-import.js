@@ -3,17 +3,22 @@
 
   // Перенос письма из UCC в открытое письмо MoEngage.
   //
-  // Связь с UCC даёт скрипт «RetKit UCC Export» (стоит и на UCC, и здесь):
-  // window.__RetKitUccLink — какие письма открыты во вкладках UCC, запрос письма.
-  // Задание приходит готовым: футер заменён на content blocks, локали UCC
-  // сопоставлены с MoEngage, Default = EN.
+  // Связь с UCC — скрипт «RetKit UCC Export» (стоит и на UCC, и здесь):
+  // window.__RetKitUccLink. Задание приходит готовым: футер заменён на content
+  // blocks, отписка в низу футера, локали UCC сопоставлены с MoEngage, Default = EN.
   //
-  // UI: чип «UCC · <письмо>» в панели RetKit → выпадающий блок: выбор письма
-  // (если открыто несколько), чипы локалей, отправитель, одна кнопка
-  // «Перенести». Ход — по чипам. Ошибка — в блоке, итог последней попытки
-  // видит и агент (status → uccLast). Кампанию сохраняет человек.
+  // Правила записи (после пилота 23.11):
+  //   • локали мост НЕ создаёт: меню «+ Locale» MoEngage добавляло не те языки.
+  //     Письмо с нужными локалями создаёт Claude через коннектор MoEngage (или человек);
+  //   • перед записью проверяется, что открыта именно нужная вкладка локали —
+  //     иначе локаль пропускается (никогда не пишем в чужую вкладку);
+  //   • отправителя мост не меняет — он задаётся при создании письма.
+  //
+  // UI: круглая кнопка в правом нижнем углу (и кнопка в панели RetKit) → меню
+  // переноса. Перенос можно запустить и из UCC: там выбирают вкладку MoEngage.
 
   const POP_ID = 'retkit-mo-ucc-pop';
+  const FAB_ID = 'retkit-mo-ucc-fab';
   const STYLE_ID = 'retkit-mo-ucc-style';
   const link = () => root.__RetKitUccLink || null;
   const api = () => root.__RetKitMoEngageBridgeApi || null;
@@ -32,7 +37,7 @@
 
   function status() {
     const l = link();
-    if (!l) return { linkInstalled: false, online: false, ready: false, tabs: [], line: 'UCC: мост не установлен (RetKit UCC Export 0.3+)' };
+    if (!l) return { linkInstalled: false, online: false, ready: false, tabs: [], line: 'UCC: мост не установлен (RetKit UCC Export 0.7+)' };
     const tabs = (typeof l.tabs === 'function' ? l.tabs() : []).map((t) => ({ ...t, env: envOf(t.host), label: `${t.name || `письмо ${t.id}`}${t.microservice ? ` · ${t.microservice}` : ''} · ${envOf(t.host)}` }));
     const line = !tabs.length ? 'UCC: открытых писем нет' : (tabs.length === 1 ? `UCC: ${tabs[0].label}, локалей ${tabs[0].locales || '?'}` : `UCC: открыто писем ${tabs.length}`);
     return { linkInstalled: true, online: tabs.length > 0, ready: tabs.length > 0, tabs, id: tabs[0]?.id || null, name: tabs[0]?.name || '', host: tabs[0]?.host || '', line };
@@ -45,22 +50,28 @@
     try { existing = await a.listLocales(); } catch (error) { throw new Error(`Не прочитал локали письма MoEngage: ${error?.message || error}`); }
     if (!existing.length) throw new Error('Не вижу вкладок локалей — откройте письмо MoEngage на шаге контента');
     const have = new Set(existing.map(localeKey));
+    const write = transfer.locales.filter((l) => have.has(localeKey(l.mo))).map((l) => l.mo);
     const missing = transfer.locales.map((l) => l.mo).filter((mo) => !have.has(localeKey(mo)));
-    let sender = null;
-    try { sender = a.readSender?.() || null; } catch {}
-    const senderHere = sender?.found ? String(sender.fromEmail || '') : '';
-    const senderDiffers = Boolean(transfer.senderEmail && senderHere && !senderHere.toLowerCase().includes(transfer.senderEmail.toLowerCase()));
     return {
       name: transfer.name, id: transfer.id, microservice: transfer.microservice, env: envOf(transfer.host),
-      existing: existing.map(localeKey), write: transfer.locales.map((l) => l.mo), missing, skipped: transfer.skipped || [], empty: transfer.empty || [],
+      existing: existing.map(localeKey), write, missing, skipped: transfer.skipped || [], empty: transfer.empty || [],
       placeholders: Object.keys(transfer.placeholders || {}), footerLeftovers: transfer.footerLeftovers || [],
-      senderUcc: transfer.senderEmail || transfer.sender || '', senderHere, senderDiffers,
     };
+  }
+
+  /** Открыть вкладку локали и убедиться, что открыта именно она. */
+  async function openLocale(a, mo) {
+    const want = localeKey(mo);
+    const ok = await a.switchLocale(mo);
+    await wait(150);
+    let now = '';
+    try { now = localeKey(a.getNativeTabLocale?.() || a.getActiveLocale?.() || ''); } catch {}
+    if (!ok || (now && now !== want)) throw new Error(`не открылась вкладка ${mo}${now ? ` (открыта ${now})` : ''} — не пишу`);
   }
 
   let running = false;
   let last = null;
-  async function apply(transfer, { applySender = false, onLine = () => {}, onLocale = () => {} } = {}) {
+  async function apply(transfer, { onLine = () => {}, onLocale = () => {} } = {}) {
     if (running) throw new Error('Перенос уже идёт');
     const a = api();
     if (!a) throw new Error('RetKit for MoEngage ещё не готов на этой вкладке');
@@ -75,29 +86,18 @@
       const flushed = await Promise.resolve(c?.flushBeforeLocaleSwitch?.() || { ok: true });
       if (flushed && flushed.ok === false) throw new Error(`Не удалось досохранить текущую локаль: ${flushed.reason || ''}`);
       const p = await plan(transfer);
-      const notAdded = new Set();
-      if (p.missing.length) {
-        say(`Добавляю локали: ${p.missing.join(', ')}`);
-        let r = null;
-        try { r = await a.addLocales(p.missing); } catch (error) { r = { ok: false, reason: error?.message || String(error) }; }
-        await wait(500);
-        const have = new Set((await a.listLocales()).map(localeKey));
-        for (const m of p.missing) if (!have.has(localeKey(m))) notAdded.add(localeKey(m));
-        say(notAdded.size ? `Не добавились: ${[...notAdded].join(', ')}${r?.reason ? ` — ${r.reason}` : ''}` : 'Локали добавлены', notAdded.size ? 'error' : 'ok');
-      }
+      if (!p.write.length) throw new Error(`В этом письме нет ни одной нужной локали (${p.missing.join(', ')}). Создайте письмо с локалями через Claude или выберите другое письмо.`);
+      for (const mo of p.missing) { onLocale(mo, 'fail', 'нет в этом письме MoEngage'); results.push({ locale: mo, ok: false, reason: 'нет в письме' }); }
       const origin = a.getActiveLocale?.() || '';
-      c?.setMultiLocaleBusy?.(true, `UCC 0/${transfer.locales.length}…`);
+      const todo = transfer.locales.filter((l) => p.write.includes(l.mo));
+      c?.setMultiLocaleBusy?.(true, `UCC 0/${todo.length}…`);
       try {
-        for (let i = 0; i < transfer.locales.length; i += 1) {
-          const l = transfer.locales[i];
-          c?.setMultiLocaleBusy?.(true, `UCC ${i + 1}/${transfer.locales.length}…`);
+        for (let i = 0; i < todo.length; i += 1) {
+          const l = todo[i];
+          c?.setMultiLocaleBusy?.(true, `UCC ${i + 1}/${todo.length}…`);
           onLocale(l.mo, 'run');
-          if (notAdded.has(localeKey(l.mo))) {
-            results.push({ locale: l.mo, ok: false, reason: 'локали нет в письме' });
-            onLocale(l.mo, 'fail', 'локали нет в письме'); continue;
-          }
           try {
-            if (!(await a.switchLocale(l.mo))) throw new Error('не открылась вкладка локали');
+            await openLocale(a, l.mo);
             const w = await a.setLocaleHtmlStable(l.mo, l.html);
             if (!w?.ok) throw new Error(w?.reason || 'MoEngage не удержал HTML');
             if (!a.setSubject(l.subject)) throw new Error('не найдено поле Subject');
@@ -116,28 +116,15 @@
       } finally {
         c?.setMultiLocaleBusy?.(false);
       }
-      let sender = null;
-      if (applySender && p.senderDiffers && transfer.senderEmail) {
-        try {
-          const current = a.readSender?.() || {};
-          const okLocales = results.filter((r) => r.ok).map((r) => r.locale);
-          const r = await a.applySender({ ...current, fromEmail: transfer.senderEmail }, okLocales);
-          const bad = (r || []).filter((x) => !x.ok);
-          sender = { ok: !bad.length, failed: bad.map((x) => `${x.locale}: ${x.reason}`) };
-          say(bad.length ? `Отправитель не встал: ${sender.failed.join('; ')}` : `Отправитель: ${transfer.senderEmail}`, bad.length ? 'error' : 'ok');
-        } catch (error) {
-          sender = { ok: false, failed: [error?.message || String(error)] };
-          say(`Отправитель: ${error?.message || error}`, 'error');
-        }
-      }
       if (origin) { try { await a.switchLocale(origin); } catch {} }
       try { a.refreshUi?.(); } catch {}
       const ok = results.filter((r) => r.ok).length;
       const failed = results.length - ok;
+      if (p.missing.length) say(`Нет в этом письме: ${p.missing.join(', ')} — создайте письмо с этими локалями`, 'warn');
       say(failed ? `Перенесено ${ok} из ${results.length}` : `Перенесено ${ok} из ${results.length}. Проверьте и сохраните кампанию.`, failed ? 'warn' : 'ok');
-      last = { ts: Date.now(), name: transfer.name, state: failed ? 'partial' : 'done', ok, failed, lines };
+      last = { ts: Date.now(), name: transfer.name, state: failed ? 'partial' : 'done', ok, failed, results, lines };
       diag('ucc.import.done', { name: transfer.name, ok, failed });
-      return { ok: !failed, written: ok, failed, results, sender, skipped: transfer.skipped || [], lines, note: 'Кампанию в MoEngage сохраняет человек.' };
+      return { ok: !failed, written: ok, failed, results, skipped: transfer.skipped || [], lines, note: 'Кампанию в MoEngage сохраняет человек.' };
     } catch (error) {
       const reason = error?.message || String(error);
       say(reason, 'error');
@@ -155,7 +142,10 @@
     const s = root.document.createElement('style');
     s.id = STYLE_ID;
     s.textContent = `
-      #${POP_ID}{position:fixed;z-index:2147483646;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;
+      #${FAB_ID}{position:fixed;right:18px;bottom:18px;z-index:2147483646;height:42px;padding:0 16px 0 12px;border-radius:21px;border:1px solid #2a3647;
+        background:#0f1722;color:#e6edf7;font:600 13px/1 Inter,ui-sans-serif,-apple-system,sans-serif;display:flex;align-items:center;gap:8px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+      #${FAB_ID}.ready{background:#15803d;border-color:#16a34a;color:#fff}
+      #${POP_ID}{position:fixed;right:18px;bottom:70px;z-index:2147483646;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;
         border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.5);font:12px/1.45 Inter,ui-sans-serif,-apple-system,sans-serif}
       #${POP_ID} .u-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 8px;font-weight:600;font-size:13px}
       #${POP_ID} .u-x{background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer;line-height:1}
@@ -169,21 +159,20 @@
       #${POP_ID} .u-tag.int{background:#3b2f12;color:#f5c26b}
       #${POP_ID} .u-chips{display:flex;flex-wrap:wrap;gap:5px}
       #${POP_ID} .u-chip{font:600 11px/1 ui-monospace,Menlo,monospace;padding:5px 7px;border-radius:6px;background:#1d2a3c;color:#c6d2e2;border:1px solid #2a3a50}
-      #${POP_ID} .u-chip.add{border-style:dashed;color:#93c5fd}
+      #${POP_ID} .u-chip.miss{border-style:dashed;color:#fbbf24}
       #${POP_ID} .u-chip.skip{opacity:.45;text-decoration:line-through}
       #${POP_ID} .u-chip.run{background:#1e3a8a;color:#fff}
       #${POP_ID} .u-chip.ok{background:#14532d;border-color:#166534;color:#bbf7d0}
       #${POP_ID} .u-chip.fail{background:#5b1a1a;border-color:#7f1d1d;color:#fecaca}
       #${POP_ID} .u-note{color:#8a98ad;margin-top:6px}
       #${POP_ID} .u-warn{color:#fbbf24;margin-top:6px}
-      #${POP_ID} .u-err{background:#3a1416;border:1px solid #7f1d1d;color:#fecaca;border-radius:8px;padding:8px 10px;margin:6px 0;white-space:pre-wrap}
+      #${POP_ID} .u-err{background:#3a1416;border:1px solid #7f1d1d;color:#fecaca;border-radius:8px;padding:6px 9px;margin:5px 0;white-space:pre-wrap}
       #${POP_ID} .u-ok{color:#86efac;margin-top:8px}
       #${POP_ID} .u-foot{display:flex;gap:8px;align-items:center;padding:10px 14px 14px;border-top:1px solid #1f2b3b}
       #${POP_ID} .u-go{flex:1;background:#2563eb;border:0;color:#fff;border-radius:8px;padding:9px 12px;font:600 12px/1 inherit;cursor:pointer}
       #${POP_ID} .u-go:disabled{background:#334155;cursor:default}
-      #${POP_ID} label.u-sw{display:flex;gap:8px;align-items:center;margin-top:8px;color:#c6d2e2;cursor:pointer}
       #${POP_ID} .u-spin{color:#8a98ad}
-      .rk-ucc-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+      .rk-ucc-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 8px}
     `;
     root.document.head.appendChild(s);
   }
@@ -195,43 +184,47 @@
   }
   function closePop() { root.document.getElementById(POP_ID)?.remove(); }
 
-  let boundButton = null;
   let selected = null; // { id, host }
   let cached = null;   // { key, transfer }
 
-  async function open() {
+  async function open(pushed = null) {
     const existing = root.document.getElementById(POP_ID);
-    if (existing) { if (!running) closePop(); return; }
+    if (existing && !pushed) { if (!running) closePop(); return; }
+    existing?.remove();
     injectStyle();
     const pop = h('div'); pop.id = POP_ID;
-    pop.style.right = '16px';
-    const r = boundButton?.getBoundingClientRect?.();
-    pop.style.top = `${Math.round((r?.bottom || 60) + 8)}px`;
     root.document.body.appendChild(pop);
-    await render(pop);
+    if (pushed?.transfer) {
+      selected = { id: pushed.transfer.id, host: pushed.transfer.host };
+      cached = { key: `${pushed.transfer.host}#${pushed.transfer.id}`, transfer: pushed.transfer };
+    }
+    await render(pop, pushed);
   }
 
-  async function render(pop) {
+  async function render(pop, pushed = null) {
     pop.textContent = '';
     const head = h('div', 'u-h'); head.append(h('span', null, 'Перенос из UCC'));
     const x = h('button', 'u-x', '×'); x.addEventListener('click', () => { if (!running) closePop(); }); head.append(x);
     pop.append(head);
     const s = status();
     const sec = h('div', 'u-sec'); pop.append(sec);
-    if (!s.linkInstalled || !s.tabs.length) {
+    if (!pushed && (!s.linkInstalled || !s.tabs.length)) {
       sec.append(h('div', 'u-err', s.linkInstalled ? 'В UCC не открыто ни одного письма. Откройте письмо в UCC — оно появится здесь.' : s.line));
       return;
     }
-    if (!selected || !s.tabs.some((t) => String(t.id) === String(selected.id) && t.host === selected.host)) selected = { id: s.tabs[0].id, host: s.tabs[0].host };
-    sec.append(h('div', 'u-cap', s.tabs.length > 1 ? `Письмо (открыто ${s.tabs.length})` : 'Письмо'));
-    for (const t of s.tabs) {
-      const b = h('button', `u-mail${String(t.id) === String(selected.id) && t.host === selected.host ? ' on' : ''}`);
-      const name = h('b', null, t.name || `#${t.id}`);
-      const env = h('span', `u-tag${t.env === 'INT' ? ' int' : ''}`, t.env);
-      const ns = h('span', 'u-tag', t.microservice || '—');
-      const loc = h('span', 'u-tag', `${t.locales || '?'} лок.`);
-      b.append(name, env, ns, loc);
-      b.addEventListener('click', () => { if (running) return; selected = { id: t.id, host: t.host }; cached = null; render(pop); });
+    if (!pushed) {
+      if (!selected || !s.tabs.some((t) => String(t.id) === String(selected.id) && t.host === selected.host)) selected = { id: s.tabs[0].id, host: s.tabs[0].host };
+      sec.append(h('div', 'u-cap', s.tabs.length > 1 ? `Откуда (открыто в UCC: ${s.tabs.length})` : 'Откуда'));
+      for (const t of s.tabs) {
+        const b = h('button', `u-mail${String(t.id) === String(selected.id) && t.host === selected.host ? ' on' : ''}`);
+        b.append(h('b', null, t.name || `#${t.id}`), h('span', `u-tag${t.env === 'INT' ? ' int' : ''}`, t.env), h('span', 'u-tag', t.microservice || '—'), h('span', 'u-tag', `${t.locales || '?'} лок.`));
+        b.addEventListener('click', () => { if (running) return; selected = { id: t.id, host: t.host }; cached = null; render(pop); });
+        sec.append(b);
+      }
+    } else {
+      sec.append(h('div', 'u-cap', 'Откуда (выбрано в UCC)'));
+      const b = h('div', 'u-mail on');
+      b.append(h('b', null, pushed.transfer.name), h('span', `u-tag${envOf(pushed.transfer.host) === 'INT' ? ' int' : ''}`, envOf(pushed.transfer.host)), h('span', 'u-tag', pushed.transfer.microservice || '—'));
       sec.append(b);
     }
     const body = h('div', 'u-sec'); pop.append(body);
@@ -251,91 +244,93 @@
       body.textContent = '';
       body.append(h('div', 'u-err', error?.message || String(error)));
       go.disabled = false; go.textContent = 'Повторить';
-      go.addEventListener('click', () => { cached = null; render(pop); });
-      log('plan error', error);
+      go.onclick = () => { cached = null; render(pop, pushed); };
+      reportPush(pushed, { state: 'error', error: error?.message || String(error) });
       return;
     }
-    body.append(h('div', 'u-cap', 'Локали MoEngage'));
+    body.append(h('div', 'u-cap', 'Куда: локали этого письма MoEngage'));
     const chips = h('div', 'u-chips'); body.append(chips);
     const chipBy = new Map();
-    for (const mo of pl.write) {
-      const add = pl.missing.includes(mo);
-      const c = h('span', `u-chip${add ? ' add' : ''}`, `${add ? '+' : ''}${mo}`);
-      c.title = add ? 'Локали нет в письме — будет добавлена' : 'HTML и Subject будут заменены';
-      chipBy.set(mo, c); chips.append(c);
+    for (const l of transfer.locales) {
+      const miss = pl.missing.includes(l.mo);
+      const c = h('span', `u-chip${miss ? ' miss' : ''}`, l.mo);
+      c.title = miss ? 'Такой локали нет в этом письме MoEngage — не переносится' : 'HTML и Subject будут заменены';
+      chipBy.set(l.mo, c); chips.append(c);
     }
-    for (const sk of pl.skipped) { const c = h('span', 'u-chip skip', sk); c.title = 'Такой локали нет в MoEngage — не переносится'; chips.append(c); }
-    if (pl.skipped.length) body.append(h('div', 'u-note', `Зачёркнутые — нет в MoEngage, попросить завести.`));
+    for (const sk of pl.skipped) { const c = h('span', 'u-chip skip', sk); c.title = 'Такой локали нет в MoEngage вообще'; chips.append(c); }
+    if (pl.missing.length) body.append(h('div', 'u-warn', `Пунктир — нет в этом письме: ${pl.missing.join(', ')}. Локали создаёт Claude при создании письма.`));
+    if (pl.skipped.length) body.append(h('div', 'u-note', 'Зачёркнутые — нет в MoEngage, попросить завести.'));
     if (pl.empty.length) body.append(h('div', 'u-warn', `Пустые в UCC: ${pl.empty.join(', ')}`));
     if (pl.footerLeftovers.length) body.append(h('div', 'u-err', `Футер не заменён: ${pl.footerLeftovers.join(', ')}`));
     if (pl.placeholders.length) body.append(h('div', 'u-note', `Остаются как есть: ${pl.placeholders.join(' ')}`));
-    let senderBox = null;
-    if (pl.senderDiffers) {
-      const lab = h('label', 'u-sw'); senderBox = h('input'); senderBox.type = 'checkbox'; senderBox.checked = true;
-      lab.append(senderBox, h('span', null, `Отправитель ${pl.senderUcc} (сейчас ${pl.senderHere})`));
-      body.append(lab);
-    }
     const out = h('div'); body.append(out);
-    go.disabled = false;
-    go.textContent = `Перенести ${pl.write.length} лок.`;
-    go.addEventListener('click', async () => {
+    const run = async () => {
       go.disabled = true; go.textContent = 'Переношу…';
       out.textContent = '';
+      reportPush(pushed, { state: 'running', done: 0, total: pl.write.length });
+      let done = 0;
       try {
         const res = await apply(transfer, {
-          applySender: Boolean(senderBox?.checked),
-          onLocale: (mo, state, title) => { const c = chipBy.get(mo); if (c) { c.className = `u-chip ${state}`; if (title) c.title = title; } },
+          onLocale: (mo, st, title) => {
+            const c = chipBy.get(mo); if (c) { c.className = `u-chip ${st}`; if (title) c.title = title; }
+            if (st === 'ok' || st === 'fail') { done += 1; reportPush(pushed, { state: 'running', done, total: transfer.locales.length, last: `${mo}: ${st === 'ok' ? '✓' : `✕ ${title || ''}`}` }); }
+          },
           onLine: (text, kind) => { if (kind === 'error') out.append(h('div', 'u-err', text)); },
         });
-        out.append(h('div', res.failed ? 'u-warn' : 'u-ok', res.failed ? `Перенесено ${res.written} из ${res.results.length} — наведите на красные локали` : `Готово: ${res.written} лок. Проверьте и сохраните кампанию.`));
-        go.textContent = 'Закрыть'; go.disabled = false;
-        go.onclick = closePop;
+        out.append(h('div', res.failed ? 'u-warn' : 'u-ok', res.failed ? `Перенесено ${res.written} из ${res.results.length}. Красные — наведите, там причина.` : `Готово: ${res.written} лок. Проверьте и сохраните кампанию.`));
+        reportPush(pushed, { state: 'done', ok: res.written, failed: res.failed, lines: res.lines });
+        go.textContent = 'Закрыть'; go.disabled = false; go.onclick = closePop;
       } catch (error) {
         out.append(h('div', 'u-err', error?.message || String(error)));
+        reportPush(pushed, { state: 'error', error: error?.message || String(error) });
         go.textContent = 'Повторить'; go.disabled = false;
-        go.onclick = () => { cached = null; render(pop); };
+        go.onclick = () => { cached = null; render(pop, pushed); };
       }
-    }, { once: true });
+    };
+    if (!pl.write.length) {
+      go.textContent = 'Нет подходящих локалей'; go.disabled = true;
+      reportPush(pushed, { state: 'error', error: 'В письме MoEngage нет нужных локалей' });
+      return;
+    }
+    go.disabled = false;
+    go.textContent = `Перенести ${pl.write.length} лок.`;
+    go.onclick = run;
+    if (pushed?.auto) run(); // запуск выбран в UCC — человек уже нажал
   }
 
-  // Кнопка в панели RetKit + полоса под панелью: видно, с каким письмом UCC связь и куда нажать.
-  const BANNER_ID = 'retkit-mo-ucc-banner';
+  function reportPush(pushed, patch) {
+    if (!pushed?.requestId) return;
+    try { link()?.reportStatus?.(pushed.requestId, patch); } catch {}
+  }
+
+  // Кнопка в углу + кнопка в панели RetKit.
+  let barButton = null;
   function paint() {
-    const b = boundButton;
-    if (!b || !b.isConnected) return;
     const s = status();
     const ready = s.linkInstalled && s.tabs.length > 0;
-    const pick = s.tabs.find((t) => selected && String(t.id) === String(selected.id) && t.host === selected.host) || s.tabs[0];
-    b.textContent = '';
-    const dot = h('span', 'rk-ucc-dot'); dot.style.background = ready ? '#22c55e' : '#64748b';
-    b.append(dot, root.document.createTextNode(ready ? 'Перенести из UCC' : 'UCC'));
-    b.style.background = ready ? '#15803d' : '';
-    b.style.borderColor = ready ? '#16a34a' : '';
-    b.style.color = ready ? '#fff' : '';
-    b.title = ready ? `${s.tabs.map((t) => t.label).join('\n')}\nНажмите — перенос в это письмо MoEngage` : s.line;
-    // Полоса под панелью
-    const bar = b.closest?.('.rk-topbar');
-    let banner = root.document.getElementById(BANNER_ID);
-    if (!bar) return;
-    if (!banner) {
-      banner = h('div'); banner.id = BANNER_ID;
-      Object.assign(banner.style, { display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 14px', font: '12px/1.3 Inter,ui-sans-serif,sans-serif', borderBottom: '1px solid #1f2b3b' });
-      bar.insertAdjacentElement('afterend', banner);
+    const text = !s.linkInstalled ? 'UCC: нет моста' : (!ready ? 'UCC: нет письма' : (s.tabs.length > 1 ? `Из UCC · ${s.tabs.length} письма` : `Из UCC · ${s.tabs[0].name || s.tabs[0].id}`));
+    const title = ready ? `${s.tabs.map((t) => t.label).join('\n')}\nНажмите — меню переноса в это письмо MoEngage` : s.line;
+    const fill = (b) => {
+      b.textContent = '';
+      const dot = h('span', 'rk-ucc-dot'); dot.style.background = ready ? '#4ade80' : '#64748b';
+      b.append(dot, root.document.createTextNode(text.length > 30 ? `${text.slice(0, 29)}…` : text));
+      b.title = title;
+    };
+    if (root.document?.body && api()) {
+      injectStyle();
+      let fab = root.document.getElementById(FAB_ID);
+      if (!fab) { fab = h('button'); fab.id = FAB_ID; fab.type = 'button'; fab.addEventListener('click', () => open()); root.document.body.appendChild(fab); }
+      fab.className = ready ? 'ready' : '';
+      fill(fab);
     }
-    banner.textContent = '';
-    banner.style.background = ready ? '#0f2a1a' : '#111827';
-    banner.style.color = ready ? '#bbf7d0' : '#94a3b8';
-    const d2 = h('span', 'rk-ucc-dot'); d2.style.background = ready ? '#22c55e' : '#64748b';
-    banner.append(d2);
-    if (!s.linkInstalled) { banner.append(root.document.createTextNode('Мост UCC не установлен — поставьте RetKit UCC Export.')); return; }
-    if (!ready) { banner.append(root.document.createTextNode('UCC: откройте письмо в UCC в соседней вкладке — оно появится здесь.')); return; }
-    banner.append(root.document.createTextNode(s.tabs.length > 1 ? `UCC на связи: открыто писем ${s.tabs.length}` : `UCC на связи: ${pick.label} · ${pick.locales || '?'} лок.`));
-    const go = h('button', null, s.tabs.length > 1 ? 'Выбрать и перенести →' : 'Перенести в это письмо →');
-    Object.assign(go.style, { marginLeft: 'auto', background: '#16a34a', color: '#fff', border: '0', borderRadius: '6px', padding: '5px 10px', font: '600 12px/1 inherit', cursor: 'pointer' });
-    go.addEventListener('click', () => open());
-    banner.append(go);
+    if (barButton?.isConnected) {
+      fill(barButton);
+      barButton.style.background = ready ? '#15803d' : '';
+      barButton.style.color = ready ? '#fff' : '';
+    }
+    root.document.getElementById('retkit-mo-ucc-banner')?.remove(); // полоса из 0.11.3 больше не нужна
   }
-  function bindButton(button) { boundButton = button; injectStyle(); paint(); }
+  function bindButton(button) { barButton = button; paint(); }
 
   let started = false;
   function start() {
@@ -343,6 +338,7 @@
     if (started || !l) return;
     started = true;
     l.onPresence?.(() => paint());
+    l.onPush?.((req) => { if (req?.transfer) open(req); });
   }
   const tickUi = () => { start(); paint(); };
   if (typeof setInterval === 'function') setInterval(tickUi, 2000); else root.setInterval?.(tickUi, 2000);
@@ -352,7 +348,7 @@
     status, plan, apply, open, bindButton, localeKey,
     last: () => last,
     /** Для агента: без apply — план; с apply — перенос. При нескольких письмах нужен id. */
-    async agent({ apply: doApply = false, applySender = false, id } = {}) {
+    async agent({ apply: doApply = false, id } = {}) {
       const s = status();
       if (!s.linkInstalled) throw new Error(s.line);
       if (!s.ready) throw new Error(`${s.line}. Попросите открыть письмо в UCC.`);
@@ -360,7 +356,7 @@
       const t = s.tabs.find((x) => String(x.id) === String(id || s.id)) || s.tabs[0];
       const transfer = await link().pull({ id: t.id, host: t.host });
       if (!doApply) return { plan: await plan(transfer), note: 'Это план. Перенос — тот же вызов с apply: true (после согласия человека).' };
-      return apply(transfer, { applySender });
+      return apply(transfer);
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);
