@@ -1,5 +1,5 @@
 {
-  "_comment": "Футер UCC -> MoEngage (noreg). {LANG} = суффикс языка MoEngage (EN, PT…). Для рег-писем будет отдельная карта. Ссылка логотипа {{embedded.domain}}/traderoom/ -> как в переделанных EN/JA.",
+  "_comment": "Футер UCC -> MoEngage (noreg). {LANG} = суффикс языка MoEngage (EN, PT…). Для рег-писем будет отдельная карта. Ссылка логотипа {{embedded.domain}}/traderoom/ -> как в переделанных EN/JA. afterTerms — вставка сразу после ссылки Terms (низ футера); если Terms нет — перед </body>.",
   "replace": {
     "{{embedded.company_address}}": "{{ContentBlock['iq_company_address_text']}}",
     "{{embedded.risk_warning}}": "{{ContentBlock['iq_risk_warning_noreg_{LANG}']}}",
@@ -15,5 +15,6 @@
     "id": "id_ID",
     "vi": "vi_VN",
     "fr": "fr_FR"
-  }
+  },
+  "afterTerms": "<br><a data-msys-unsubscribe=\"1\" href=\"{{ContentBlock['iq_unsubscribe']}}\" style=\"color: #2ba6cb; text-decoration: none;\">Manage your preference here</a>"
 }

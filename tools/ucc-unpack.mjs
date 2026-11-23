@@ -41,6 +41,11 @@ for (const l of tpl.locales || []) {
   let html = l.html_body || '';
   const lang = code.toUpperCase();
   for (const [from, to] of Object.entries(footerMap)) if (to) html = html.split(from).join(to.replaceAll('{LANG}', lang));
+  if (mapFile.afterTerms && !html.includes('iq_unsubscribe')) {
+    const at = html.indexOf('iq_terms_noreg_url'); const close = at >= 0 ? html.indexOf('</a>', at) : -1;
+    if (close >= 0) html = html.slice(0, close + 4) + mapFile.afterTerms + html.slice(close + 4);
+    else { const b = html.lastIndexOf('</body>'); html = b >= 0 ? html.slice(0, b) + mapFile.afterTerms + html.slice(b) : html + mapFile.afterTerms; }
+  }
   const moLocale = moLocales[code] || '';
   if (!moLocale) report.noMoengageLocale.push(code);
   for (const from of Object.keys(footerMap)) if (!footerMap[from] && html.includes(from)) report.footerUnmapped.add(from);

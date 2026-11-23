@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.4.0
+// @version      0.5.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -242,6 +242,7 @@
       '{{embedded.domain}}/traderoom/': 'https://iqbroker.co/lp/multilink/asset?aff=7&amp;afftrack=mail_system&amp;retrack=system',
     },
     moengageLocales: { en: 'en_US', ar: 'ar_KW', es: 'es_ES', pt: 'pt_PT', th: 'th_TH', id: 'id_ID', vi: 'vi_VN', fr: 'fr_FR' },
+    afterTerms: "<br><a data-msys-unsubscribe=\"1\" href=\"{{ContentBlock['iq_unsubscribe']}}\" style=\"color: #2ba6cb; text-decoration: none;\">Manage your preference here</a>",
   };
   const PLACEHOLDER_RE = /\{\{\s*[^{}]+?\s*\}\}/g;
 
@@ -249,7 +250,17 @@
     const lang = String(code || '').toUpperCase();
     let out = String(html || '');
     for (const [from, to] of Object.entries(MAP.replace)) if (to) out = out.split(from).join(to.split('{LANG}').join(lang));
-    return out;
+    return addAfterTerms(out);
+  }
+
+  /** Отписка MoEngage — в самый низ футера: сразу после ссылки Terms (или перед </body>). Повторно не вставляется. */
+  function addAfterTerms(html) {
+    if (!MAP.afterTerms || html.includes("iq_unsubscribe")) return html;
+    const at = html.indexOf("iq_terms_noreg_url");
+    const close = at >= 0 ? html.indexOf('</a>', at) : -1;
+    if (close >= 0) return html.slice(0, close + 4) + MAP.afterTerms + html.slice(close + 4);
+    const body = html.lastIndexOf('</body>');
+    return body >= 0 ? html.slice(0, body) + MAP.afterTerms + html.slice(body) : html + MAP.afterTerms;
   }
 
   /** Письмо (результат collect) → задание для MoEngage. */
@@ -260,7 +271,7 @@
       const mo = MAP.moengageLocales[code] || '';
       const html = applyFooter(l.html, code);
       if (!mo) { skipped.push(code.toUpperCase()); continue; }
-      if (!html.trim()) { empty.push(code.toUpperCase()); continue; }
+      if (!String(l.html || '').trim()) { empty.push(code.toUpperCase()); continue; }
       for (const m of html.match(PLACEHOLDER_RE) || []) if (!/ContentBlock\[/.test(m)) placeholders[m] = (placeholders[m] || 0) + 1;
       locales.push({ ucc: code.toUpperCase(), mo, subject: l.subject, html });
     }
@@ -395,14 +406,17 @@
       return pick('input[name*="campaign" i][name*="name" i]') || pick('[data-testid*="campaign-name" i]') || String(document.title || '').replace(/\s*[|·-]\s*MoEngage.*$/i, '').trim();
     }
     function moBeat() {
-      const editor = Boolean(W.__RetKitMoEngageBridgeApi) && /campaign|flows|email/i.test(location.pathname) && !/settings/i.test(location.pathname);
-      gm.set(MO_PREFIX + TAB, { ts: now(), tab: TAB, title: moTitle(), path: location.pathname, editor });
+      // MoEngage меняет адрес через #, поэтому смотрим не на путь, а на вкладки локалей письма.
+      let locale = '';
+      try { locale = W.__RetKitMoEngageBridgeApi?.getNativeTabLocale?.() || ''; } catch {}
+      const editor = Boolean(locale) && !/settings/i.test(location.href);
+      gm.set(MO_PREFIX + TAB, { ts: now(), tab: TAB, title: moTitle(), path: location.pathname + location.hash, editor });
     }
     moBeat();
     setInterval(moBeat, 2000);
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.4.0',
+      version: '0.5.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */

@@ -64,7 +64,7 @@ const fetch = async (url, opts) => { calls.push(opts?.method || 'GET'); return {
 // 1. Вкладка UCC: кнопки, присутствие, карта = tools/ucc-footer-map.json
 const ucc = tab('ucc.int.iqoption.com', '/email-templates/15928/edit', { fetch });
 const exp = ucc.sandbox.__retkitUccExport;
-assert.deepEqual(JSON.parse(JSON.stringify(exp.MAP)), { replace: mapFile.replace, moengageLocales: mapFile.moengageLocales });
+assert.deepEqual(JSON.parse(JSON.stringify(exp.MAP)), { replace: mapFile.replace, moengageLocales: mapFile.moengageLocales, afterTerms: mapFile.afterTerms });
 assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-export'), 'кнопка ZIP');
 assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill'), 'индикатор моста');
 await tick(); await tick();
@@ -82,6 +82,9 @@ assert.deepEqual([...t.skipped], ['RU']);
 assert.deepEqual([...t.empty], ['FR']);
 assert.match(t.locales[1].html, /iq_risk_warning_noreg_EN.*iq_company_address_text/s);
 assert.match(t.locales[1].html, /iqbroker\.co\/lp\/multilink/);
+assert.match(t.locales[1].html, /iq_terms_noreg_url'\]\}\}">T<\/a><br><a data-msys-unsubscribe="1" href="\{\{ContentBlock\['iq_unsubscribe'\]\}\}"/, 'отписка сразу после Terms');
+assert.match(t.locales[2].html, /iq_unsubscribe'\]\}\}"[^>]*>Manage your preference here<\/a><\/body>|iq_unsubscribe/, 'без Terms — перед </body>');
+assert.equal(exp.applyFooter(t.locales[1].html, 'en').split('iq_unsubscribe').length, 2, 'не вставляется повторно');
 assert.match(t.locales[2].html, /iq_risk_warning_noreg_PT/);
 assert.equal(t.footerLeftovers.length, 0);
 assert.equal(t.senderEmail, 'noreply@iqoption.com');
