@@ -171,43 +171,69 @@ assert.equal(partial.failed, 1);
 assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not keep')));
 
 // 5. Агент через agent-relay: ucc_status в статусе
-// 6. UCC INT → UCC PROD: вкладка PROD получает письмо и вставляет в ОТКРЫТУЮ локаль (без сохранения)
+// 6. UCC INT → UCC PROD: окно переноса (откуда → куда, локали), задание, помощник в PROD
 {
   const ed = { v: 'old', setValue(v) { this.v = v; }, getValue() { return this.v; } };
   const subj = { value: 'old subj', events: [], closest: () => ({ innerText: 'Subject' }), dispatchEvent(e) { this.events.push(e.type); } };
   class HTMLInputElement {}
   Object.defineProperty(HTMLInputElement.prototype, 'value', { set(v) { this._v = v; }, get() { return this._v; }, configurable: true });
-  const prodResponses = { ...responses, '/api/email/templates/4097': { ...tpl, id: 4097 } };
+  Object.setPrototypeOf(subj, HTMLInputElement.prototype);
+  const prodTpl = { ...tpl, id: 4097, locales: tpl.locales.filter((l) => l.locale.short_name !== 'ru') };
+  const prodResponses = { ...responses, '/api/email/templates/4097': prodTpl };
   const prodFetch = async (url, opts) => { calls.push(opts?.method || 'GET'); return { ok: url in prodResponses, status: 200, json: async () => JSON.parse(JSON.stringify(prodResponses[url])) }; };
   const confirms = [];
   const prod = tab('ucc.iqoption.com', '/email-templates/4097/edit', {
     fetch: prodFetch, ace: { edit: () => ed }, HTMLInputElement, Event: class { constructor(t) { this.type = t; } },
     confirm: (m) => { confirms.push(m); return true; },
   });
-  prod.sandbox.document.querySelector = (q) => (q === '.ant-tabs-tab-active' ? { innerText: 'PT' } : q === '.ace_editor' ? {} : null);
-  prod.sandbox.document.querySelectorAll = (q) => (q === 'input' ? [subj] : []);
-  Object.setPrototypeOf(subj, HTMLInputElement.prototype);
+  let active = 'pt';
+  const tabsEl = ['en', 'pt', 'fr'].map((c) => ({ innerText: c.toUpperCase(), click() { active = c; } }));
+  prod.sandbox.document.querySelector = (q) => (q === '.ant-tabs-tab-active' ? { innerText: active.toUpperCase() } : q === '.ace_editor' ? {} : null);
+  prod.sandbox.document.querySelectorAll = (q) => (q === 'input' ? [subj] : q === '.ant-tabs-tab' ? tabsEl : []);
   for (const f of prod.timers) await f();
   await tick(); await tick();
+  for (const f of prod.timers) await f(); // второй сигнал — уже с именем письма
+
+  // INT читает PROD через GM_xmlhttpRequest (другой сайт), только GET
+  const xhrCalls = [];
+  ucc.sandbox.GM_xmlhttpRequest = (o) => { xhrCalls.push(o); setTimeout(() => o.onload({ status: 200, responseText: JSON.stringify(prodTpl) }), 0); };
+  const opened = [];
+  ucc.sandbox.open = (u) => opened.push(u);
   for (const f of ucc.timers) await f();
-  // INT видит PROD-вкладку в своём меню и отправляет
-  const intPresence = Object.values(store).filter((v) => v && v.host === 'ucc.iqoption.com' && v.id);
-  assert.equal(intPresence.length, 1, 'INT видит вкладку PROD');
-  const pill = ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill' && !n.removed);
-  pill.onclick();
-  const prodItem = ucc.dom.nodes.filter((n) => typeof n.onclick === 'function').find((n) => n.children.some((c) => /^PROD:/.test(c.textContent || '')));
-  assert.ok(prodItem, 'в меню INT есть пункт «PROD: …»');
-  await prodItem.onclick();
-  await tick(); await tick(); await tick();
-  const insert = prod.dom.nodes.filter((n) => typeof n.onclick === 'function').find((n) => n.children.some((c) => /Вставить в открытую локаль PT/.test(c.textContent || '')));
-  assert.ok(insert, 'на PROD появилось «Вставить в открытую локаль PT»');
+  await tick(); await tick();
+  ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill' && !n.removed).onclick();
+  const transferBtn = ucc.dom.nodes.filter((n) => typeof n.onclick === 'function').find((n) => n.children.some((c) => /Перенести в UCC PROD/.test(c.textContent || '')));
+  assert.ok(transferBtn, 'в меню INT есть «⇄ Перенести в UCC PROD»');
+  transferBtn.onclick();
+  const input = ucc.dom.nodes.find((n) => n.tag === 'input' && !n.removed);
+  assert.match(input.value, /ucc\.iqoption\.com\/email-templates\/4097\/edit/, 'цель подставилась из открытой вкладки PROD');
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.equal(xhrCalls[0].method, 'GET');
+  const texts = ucc.dom.nodes.filter((n) => !n.removed).map((n) => n.textContent || '');
+  assert.ok(texts.some((t) => /Перенесётся \(3\)/.test(t)), 'перенесётся 3 локали');
+  assert.ok(texts.some((t) => /Нет в PROD \(1\)/.test(t)), 'RU нет в PROD — подсказка добавить «+»');
+  const go = ucc.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Открыть письмо PROD и перенести/.test(n.textContent || ''));
+  go.onclick();
+  assert.equal(opened.length, 0, 'PROD уже открыт — новую вкладку не открываем');
+  await tick(); await tick();
+
+  // PROD: помощник
+  for (const f of prod.timers) await f();
+  const guide = () => prod.dom.nodes.find((n) => n.id === 'retkit-ucc-guide' && !n.removed);
+  assert.ok(guide(), 'в PROD появился помощник переноса');
+  const findBtn = (re) => prod.dom.nodes.filter((n) => !n.removed && typeof n.onclick === 'function').find((n) => re.test(n.textContent || ''));
   const before = calls.length;
-  insert.onclick();
-  assert.equal(ed.v, tpl.locales[1].html_body, 'HTML PT вставлен как есть (без замены футера)');
+  findBtn(/^1\. Вставить PT/).onclick();
+  assert.equal(ed.v, tpl.locales[1].html_body, 'HTML PT вставлен как есть');
   assert.equal(subj._v, 'Seu código', 'Subject PT вставлен');
-  assert.ok(subj.events.includes('input'), 'React узнал о новой теме');
-  assert.equal(confirms.length, 1, 'на PROD спрашивает подтверждение');
-  assert.ok(calls.slice(before).every((m) => m === 'GET'), 'ничего не сохраняет');
+  assert.ok(subj.events.includes('input'));
+  assert.equal(confirms.length, 1, 'PROD: одно подтверждение на весь перенос');
+  findBtn(/^3\. Дальше: EN/).onclick();
+  assert.equal(active, 'en', '«Дальше» переключает вкладку локали');
+  await new Promise((r) => setTimeout(r, 450));
+  findBtn(/^1\. Вставить EN/).onclick();
+  assert.equal(confirms.length, 1, 'второй раз не спрашивает');
+  assert.ok(calls.slice(before).every((m) => m === 'GET'), 'в UCC ничего не сохраняется');
 }
 
 // 7. Клик мимо окна закрывает его, клик внутри — нет
