@@ -251,4 +251,42 @@ assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not k
   assert.ok(!menu(), 'клик мимо окна — закрывает');
 }
 
+// 8. «⚡ Перенести всё»: создаёт недостающие локали (POST [{locale_id}]) и сохраняет код+тему (PUT), без register
+{
+  const db = { id: 777, name: 'fraud-2', locales: [{ id: 5001, locale_id: 2, locale: { short_name: 'en' }, subject: 'Old EN', html_body: '' }] };
+  const reqs = [];
+  const f = async (url, opts = {}) => {
+    const method = opts.method || 'GET';
+    reqs.push({ method, url, body: opts.body ? JSON.parse(opts.body) : undefined });
+    if (url === '/api/init') return { ok: true, status: 200, json: async () => ({ locales: [{ id: 2, short_name: 'en' }, { id: 7, short_name: 'pt' }, { id: 9, short_name: 'de' }] }) };
+    if (url === '/api/email/templates/777' && method === 'GET') return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(db)) };
+    if (url === '/api/email/templates/777/locales' && method === 'POST') {
+      for (const x of JSON.parse(opts.body)) db.locales.push({ id: 6000 + x.locale_id, locale_id: x.locale_id, locale: { short_name: x.locale_id === 7 ? 'pt' : 'de' }, subject: '', html_body: '' });
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    const m = url.match(/^\/api\/email\/templates\/777\/locales\/(\d+)$/);
+    if (m && method === 'PUT') { const rec = db.locales.find((l) => String(l.id) === m[1]); Object.assign(rec, JSON.parse(opts.body)); return { ok: true, status: 204, json: async () => ({}) }; }
+    return { ok: false, status: 404, json: async () => ({ error: 'nf' }) };
+  };
+  const alerts = [];
+  const t3 = tab('ucc.int.iqoption.com', '/email-templates/777/edit', { fetch: f, confirm: () => true, alert: (m) => alerts.push(m), location: { host: 'ucc.int.iqoption.com', pathname: '/email-templates/777/edit', reload() {} } });
+  t3.sandbox.document.querySelector = () => null;
+  t3.sandbox.document.querySelectorAll = () => [];
+  store['retkit.ucc.u2u.jobs'] = { 'ucc.int.iqoption.com:777': { ts: Date.now(), from: { host: 'studio', label: 'студии', name: 'fraud-2' }, to: { host: 'ucc.int.iqoption.com', id: '777' }, done: {},
+    locales: [{ code: 'en', subject: 'Contract terminated', html: '<p>EN</p>' }, { code: 'pt', subject: 'Seu contrato foi rescindido', html: '<p>PT</p>' }, { code: 'de', subject: '', html: '<p>DE</p>' }] } };
+  for (const fn of t3.timers) await fn();
+  const all = t3.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Перенести всё сразу/.test(n.textContent || ''));
+  assert.ok(all, 'в помощнике есть «⚡ Перенести всё сразу»');
+  await all.onclick();
+  const post = reqs.find((r) => r.method === 'POST');
+  assert.deepEqual(post.body, [{ locale_id: 7 }, { locale_id: 9 }], 'создаёт только недостающие PT и DE');
+  const puts = reqs.filter((r) => r.method === 'PUT');
+  assert.equal(puts.length, 3);
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'pt').subject, 'Seu contrato foi rescindido');
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'pt').html_body, '<p>PT</p>');
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'en').subject, 'Contract terminated');
+  assert.ok(!reqs.some((r) => /register|status/.test(r.url)), 'Set as Ready не нажимает');
+  assert.match(alerts.at(-1), /Сохранено: 3/);
+}
+
 console.log('✓ ucc bridge: две вкладки через хранилище TM, присутствие, задание, перенос локалей + Subject + отправитель, ошибки по локали, только GET');
