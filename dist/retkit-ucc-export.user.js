@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.10.0
+// @version      0.11.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
 // @match        https://dashboard-02.moengage.com/*
+// @match        http://localhost:3000/*
+// @match        http://127.0.0.1:3000/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-ucc-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-ucc-export.user.js
 // @grant        GM_getValue
@@ -44,6 +46,8 @@
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   if (W.__retkitUccExport) return;
   const IS_UCC = /(^|\.)ucc(\.int)?\.iqoption\.com$/.test(location.host);
+  // Студия RetKit (Retention Future) на своей машине: «Код» → перенос локалей в UCC.
+  const IS_STUDIO = /^(localhost|127\.0\.0\.1):3000$/.test(location.host);
 
   // ─── ZIP без зависимостей (метод STORE) ───────────────────────────────────
   const CRC = (() => {
@@ -314,10 +318,12 @@
         gm.set(KEY.reply, { requestId: req.requestId, ts: now(), error: error?.message || String(error) });
       }
     });
-    heartbeat();
-    setInterval(heartbeat, 2000);
-    try { document.addEventListener('visibilitychange', heartbeat); } catch {}
-    try { W.addEventListener('pagehide', () => gm.del(PRESENCE_PREFIX + TAB)); } catch {}
+    if (IS_UCC) {
+      heartbeat();
+      setInterval(heartbeat, 2000);
+      try { document.addEventListener('visibilitychange', heartbeat); } catch {}
+      try { W.addEventListener('pagehide', () => gm.del(PRESENCE_PREFIX + TAB)); } catch {}
+    }
 
     // Кнопка моста в UCC: показывает, какие письма MoEngage открыты, и запускает перенос в выбранное.
     const PILL_ID = 'retkit-ucc-pill';
@@ -399,29 +405,55 @@
     const codesOf = (tpl) => (tpl.locales || []).map((l) => String(l.locale?.short_name || l.locale?.name || '').toLowerCase()).filter(Boolean);
 
     // ─── Окно переноса (в письме-источнике) ───────────────────────────────────
-    function openTransfer() {
+    /** Источник переноса: это письмо UCC (по умолчанию) или студия. */
+    function uccSource() {
+      const mine = metaCache.get(templateId()) || {};
+      return {
+        title: `Перенос ${envName(location.host)} → ${envName(otherHost(location.host))}`,
+        fromLabel: `Откуда · UCC ${envName(location.host)}`,
+        fromText: `${mine.name || `id ${templateId()}`}${mine.microservice ? ` · ${mine.microservice}` : ''} · ${mine.locales || '?'} лок.`,
+        name: mine.name, microservice: mine.microservice,
+        toHost: otherHost(location.host), anyEnv: false,
+        collect: () => collect(templateId()),
+        from: (src) => ({ host: location.host, label: envName(location.host), id: src.id, name: src.name, microservice: src.microservice }),
+      };
+    }
+    function openTransfer(source = uccSource()) {
       document.getElementById(MENU_ID)?.remove();
-      const toHost = otherHost(location.host);
+      let toHost = source.toHost;
       const box = el2('div', 'position:fixed;right:20px;bottom:64px;z-index:99999;width:420px;max-height:75vh;overflow:auto;background:#0f1722;color:#e6edf7;border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);font:12px/1.5 sans-serif;padding:14px 16px');
       box.id = MENU_ID;
-      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:14px', `Перенос ${envName(location.host)} → ${envName(toHost)}`);
+      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:14px', source.title);
       const x = el2('button', 'background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer', '×'); x.onclick = () => box.remove(); head.append(x);
       box.append(head);
-      const mine = metaCache.get(templateId()) || {};
+      const mine = { name: source.name, microservice: source.microservice };
       const card = (label, text, color) => { const c = el2('div', `margin-top:8px;padding:8px 10px;border-radius:9px;background:#152030;border:1px solid ${color}`); c.append(el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', label), el2('div', 'font-weight:600', text)); return c; };
-      box.append(card(`Откуда · UCC ${envName(location.host)}`, `${mine.name || `id ${templateId()}`}${mine.microservice ? ` · ${mine.microservice}` : ''} · ${mine.locales || '?'} лок.`, '#334155'));
+      box.append(card(source.fromLabel, source.fromText, '#334155'));
       box.append(el2('div', 'text-align:center;color:#64748b;font-size:16px;margin:2px 0', '↓'));
       const toCard = el2('div', 'padding:8px 10px;border-radius:9px;background:#152030;border:1px dashed #475569');
-      toCard.append(el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', `Куда · UCC ${envName(toHost)}`));
-      const open = uccTabs().filter((t) => t.host === toHost);
-      const same = open.find((t) => mine.name && t.name === mine.name && (t.microservice || '') === (mine.microservice || ''));
+      const paints = [];
+      const toLabel = el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', `Куда · UCC ${envName(toHost)}`);
+      toCard.append(toLabel);
+      if (source.anyEnv) {
+        const envRow = el2('div', 'display:flex;gap:6px;margin-top:6px');
+        for (const h of ['ucc.int.iqoption.com', 'ucc.iqoption.com']) {
+          const b = el2('button', 'flex:1;padding:5px;border-radius:7px;border:1px solid #334155;cursor:pointer;font:600 12px sans-serif', envName(h));
+          const paint = () => { b.style.background = toHost === h ? '#2563eb' : '#1e293b'; b.style.color = '#fff'; };
+          b.onclick = () => { toHost = h; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.placeholder = `ссылка на письмо ${envName(toHost)} или его номер`; check(); };
+          paints.push(paint); paint();
+          envRow.append(b);
+        }
+        toCard.append(envRow);
+      }
+      const open = uccTabs().filter((t) => source.anyEnv || t.host === toHost);
+      const same = open.find((t) => mine.name && t.name === mine.name && t.host === toHost && (t.microservice || '') === (mine.microservice || ''));
       const input = el2('input', 'width:100%;box-sizing:border-box;margin-top:6px;padding:7px 9px;border-radius:7px;border:1px solid #334155;background:#0b1220;color:#e6edf7;font:inherit');
       input.placeholder = `ссылка на письмо ${envName(toHost)} или его номер`;
       if (same) input.value = `https://${same.host}/email-templates/${same.id}/edit`;
       toCard.append(input);
       for (const t of open) {
-        const b = el2('button', 'display:inline-block;margin:6px 6px 0 0;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e6edf7;cursor:pointer;font:inherit', `открыто: ${t.name || `id ${t.id}`}`);
-        b.onclick = () => { input.value = `https://${t.host}/email-templates/${t.id}/edit`; check(); };
+        const b = el2('button', 'display:inline-block;margin:6px 6px 0 0;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e6edf7;cursor:pointer;font:inherit', `открыто${source.anyEnv ? ` ${envName(t.host)}` : ''}: ${t.name || `id ${t.id}`}`);
+        b.onclick = () => { toHost = t.host; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.value = `https://${t.host}/email-templates/${t.id}/edit`; check(); };
         toCard.append(b);
       }
       box.append(toCard);
@@ -437,14 +469,14 @@
         if (!target) { if (input.value.trim()) result.append(el2('div', 'color:#fbbf24', 'Нужна ссылка вида …/email-templates/4097/edit или номер письма.')); return; }
         result.append(el2('div', 'color:#94a3b8', 'Читаю оба письма…'));
         try {
-          const [src, dst] = await Promise.all([collect(templateId()), readOther(target.host, target.id)]);
+          const [src, dst] = await Promise.all([source.collect(), readOther(target.host, target.id)]);
           result.textContent = '';
           const dstCodes = codesOf(dst);
           const srcCodes = src.locales.map((l) => l.code.toLowerCase());
           const both = srcCodes.filter((c) => dstCodes.includes(c));
           const noTarget = srcCodes.filter((c) => !dstCodes.includes(c));
           const onlyTarget = dstCodes.filter((c) => !srcCodes.includes(c));
-          const sameName = dst.name === src.name;
+          const sameName = !src.name || dst.name === src.name;
           result.append(el2('div', `font-weight:600;color:${sameName ? '#86efac' : '#fbbf24'}`, `${sameName ? '✓' : '⚠'} ${envName(target.host)}: «${dst.name}» (${dst.microservice_name || '—'})${sameName ? '' : ' — имя не совпадает'}`));
           const legend = (list, color, title) => {
             if (!list.length) return;
@@ -455,14 +487,15 @@
             row.append(chips);
             result.append(row);
           };
-          legend(both, '#14532d', `Перенесётся (${both.length}): код + Subject`);
+          const hasSubjects = src.locales.some((l) => l.subject);
+          legend(both, '#14532d', `Перенесётся (${both.length}): ${hasSubjects ? 'код + Subject' : 'код (тема остаётся как в UCC)'}`);
           legend(noTarget, '#7c2d12', `Нет в ${envName(target.host)} (${noTarget.length}): добавьте локаль «+» в целевом письме — потом перенесётся`);
           legend(onlyTarget, '#334155', `Есть только в ${envName(target.host)} (${onlyTarget.length}): не трогаем`);
           const go = el2('button', 'display:block;width:100%;margin-top:12px;padding:10px;border-radius:9px;border:0;background:#2563eb;color:#fff;font:600 13px sans-serif;cursor:pointer', `Открыть письмо ${envName(target.host)} и перенести →`);
           go.onclick = () => {
             saveJob({
               ts: now(),
-              from: { host: location.host, id: src.id, name: src.name, microservice: src.microservice },
+              from: source.from(src),
               to: { host: target.host, id: String(target.id), name: dst.name },
               locales: src.locales.map((l) => ({ code: l.code.toLowerCase(), subject: l.subject, html: l.html })),
               done: {},
@@ -515,13 +548,13 @@
       const loc = job.locales.find((l) => l.code === code);
       if (!loc) throw new Error(`в письме-источнике нет локали ${code.toUpperCase() || '?'}`);
       if (envName(location.host) === 'PROD' && !job.prodOk) {
-        if (!W.confirm?.(`Это PROD UCC. Переносим «${job.from.name}» из ${envName(job.from.host)}.\nКод вставляется в редактор, сохраняете вы кнопкой Save. Продолжить?`)) return null;
+        if (!W.confirm?.(`Это PROD UCC. Переносим «${job.from.name}» из ${job.from.label || envName(job.from.host)}.\nКод вставляется в редактор, сохраняете вы кнопкой Save. Продолжить?`)) return null;
         job.prodOk = true;
       }
       const ed = aceEditor();
       ed.setValue(loc.html, -1);
       if (ed.getValue() !== loc.html) throw new Error('редактор не принял код');
-      const subj = subjectInput();
+      const subj = loc.subject ? subjectInput() : null;
       if (subj) setSubject(subj, loc.subject);
       job.done = { ...(job.done || {}), [code]: true };
       saveJob(job);
@@ -547,7 +580,7 @@
       const doneN = todo.filter((l) => job.done?.[l.code]).length;
       const act = activeLocale();
       const head = el2('div', 'display:flex;justify-content:space-between;align-items:center');
-      head.append(el2('b', 'font-size:13px', `Перенос из ${envName(job.from.host)} · ${doneN}/${todo.length}`));
+      head.append(el2('b', 'font-size:13px', `Перенос из ${job.from.label || envName(job.from.host)} · ${doneN}/${todo.length}`));
       const close = el2('button', 'background:none;border:0;color:#8a98ad;cursor:pointer;font:inherit', 'завершить ✕');
       close.onclick = () => { if (doneN === todo.length || W.confirm?.('Остановить перенос? Уже сохранённое останется.')) { dropJob(job); renderGuide(); } };
       head.append(close);
@@ -567,9 +600,9 @@
       } else {
         const done = job.done?.[act];
         steps.append(el2('div', 'font-weight:600;margin-bottom:6px', `Локаль ${act.toUpperCase()}`));
-        const ins = el2('button', `width:100%;padding:9px;border-radius:8px;border:0;background:${done ? '#334155' : '#2563eb'};color:#fff;font:600 13px sans-serif;cursor:pointer`, done ? `↻ Вставить ${act.toUpperCase()} ещё раз` : `1. Вставить ${act.toUpperCase()} (код + Subject)`);
+        const ins = el2('button', `width:100%;padding:9px;border-radius:8px;border:0;background:${done ? '#334155' : '#2563eb'};color:#fff;font:600 13px sans-serif;cursor:pointer`, done ? `↻ Вставить ${act.toUpperCase()} ещё раз` : `1. Вставить ${act.toUpperCase()} (${job.locales.some((l) => l.subject) ? 'код + Subject' : 'код'})`);
         ins.onclick = () => {
-          try { const r = insertActive(job); if (!r) return; guideNote = r.subject ? '' : 'Поле Subject не найдено — тему вставьте вручную.'; }
+          try { const r = insertActive(job); if (!r) return; const hasSubj = job.locales.find((l) => l.code === r.code)?.subject; guideNote = r.subject || !hasSubj ? '' : 'Поле Subject не найдено — тему вставьте вручную.'; }
           catch (error) { guideNote = `✕ ${error.message}`; }
           renderGuide();
         };
@@ -641,7 +674,7 @@
       pill.style.color = '#fff';
       pill.textContent = '';
       const d = el2('span', `width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:${links ? '#4ade80' : '#cbd5e1'}`);
-      pill.append(d, document.createTextNode(job ? `RetKit ▾ · перенос из ${envName(job.from.host)}` : `RetKit ▾${links ? ` · MoEngage: ${links}` : ''}`));
+      pill.append(d, document.createTextNode(job ? `RetKit ▾ · перенос из ${job.from.label || envName(job.from.host)}` : `RetKit ▾${links ? ` · MoEngage: ${links}` : ''}`));
       renderGuide();
       pill.title = 'RetKit: ZIP письма, перенос в MoEngage, перенос в другое письмо UCC';
     }
@@ -656,6 +689,41 @@
         menu.remove();
       }, true);
     } catch {}
+    if (IS_STUDIO) {
+      // Студия: кнопка «→ UCC» во вкладке «Код», когда студия отдаёт локали письма.
+      const studioApi = () => W.RetKitStudioExport;
+      function studioSource() {
+        const info = studioApi()?.info?.() || {};
+        return {
+          title: 'Перенос из студии → UCC',
+          fromLabel: 'Откуда · студия RetKit (Код)',
+          fromText: `${info.name || 'письмо'} · ${(info.locales || []).length} лок.: ${(info.locales || []).map((c) => c.toUpperCase()).join(', ')}`,
+          name: info.name || '', microservice: '',
+          toHost: 'ucc.int.iqoption.com', anyEnv: true,
+          collect: async () => {
+            const r = await studioApi().allLocales();
+            return { id: 'studio', name: r.name || info.name || '', microservice: '', locales: r.locales.map((l) => ({ code: String(l.code).toLowerCase(), subject: l.subject || '', html: l.html })) };
+          },
+          from: (src) => ({ host: 'studio', label: 'студии', id: 'studio', name: src.name, microservice: '' }),
+        };
+      }
+      function syncStudio() {
+        let b = document.getElementById(PILL_ID);
+        const info = studioApi()?.info?.();
+        if (!info || !(info.locales || []).length) { b?.remove(); return; }
+        if (!b) {
+          b = el2('button', 'position:fixed;left:20px;bottom:20px;z-index:99999;padding:10px 16px;border-radius:999px;border:0;background:#3b5bfd;color:#fff;font:600 13px/1 sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer');
+          b.id = PILL_ID; b.type = 'button';
+          b.title = 'RetKit: перенести локали этого письма в письмо UCC (INT или PROD)';
+          b.onclick = () => (document.getElementById(MENU_ID) ? document.getElementById(MENU_ID).remove() : openTransfer(studioSource()));
+          document.body.appendChild(b);
+        }
+        b.textContent = `→ UCC · ${(info.locales || []).length} лок.`;
+      }
+      syncStudio();
+      setInterval(syncStudio, 2000);
+      return;
+    }
     syncPill();
     setInterval(syncPill, 2000);
   }
@@ -710,7 +778,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.10.0',
+      version: '0.11.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -789,7 +857,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.10.0' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.11.0' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -811,7 +879,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.10.0' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.11.0' }).catch(() => {});
     loop();
   }
 
@@ -821,6 +889,8 @@
     setInterval(sync, 1000); // UCC — одностраничное приложение, адрес меняется без перезагрузки
     uccLink();
     if (typeof sessionStorage !== "undefined") uccMailbox(); // в тестах (vm) ящика нет
+  } else if (IS_STUDIO) {
+    uccLink();
   } else if (/moengage\.com$/.test(location.host)) {
     moengageLink();
   }
