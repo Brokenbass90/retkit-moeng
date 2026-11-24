@@ -65,8 +65,8 @@ const fetch = async (url, opts) => { calls.push(opts?.method || 'GET'); return {
 const ucc = tab('ucc.int.iqoption.com', '/email-templates/15928/edit', { fetch });
 const exp = ucc.sandbox.__retkitUccExport;
 assert.deepEqual(JSON.parse(JSON.stringify(exp.MAP)), { replace: mapFile.replace, moengageLocales: mapFile.moengageLocales, afterTerms: mapFile.afterTerms });
-assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-export'), 'кнопка ZIP');
-assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill'), 'индикатор моста');
+assert.ok(ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill'), 'одна кнопка RetKit');
+assert.ok(!ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-export' && !n.removed), 'отдельной кнопки ZIP больше нет');
 await tick(); await tick();
 for (const f of ucc.timers) await f();
 const presence = Object.entries(store).filter(([k]) => k.startsWith('retkit.ucc.presence.')).map(([, v]) => v);
@@ -169,4 +169,43 @@ assert.equal(partial.failed, 1);
 assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not keep')));
 
 // 5. Агент через agent-relay: ucc_status в статусе
+// 6. UCC INT → UCC PROD: вкладка PROD получает письмо и вставляет в ОТКРЫТУЮ локаль (без сохранения)
+{
+  const ed = { v: 'old', setValue(v) { this.v = v; }, getValue() { return this.v; } };
+  const subj = { value: 'old subj', events: [], closest: () => ({ innerText: 'Subject' }), dispatchEvent(e) { this.events.push(e.type); } };
+  class HTMLInputElement {}
+  Object.defineProperty(HTMLInputElement.prototype, 'value', { set(v) { this._v = v; }, get() { return this._v; }, configurable: true });
+  const prodResponses = { ...responses, '/api/email/templates/4097': { ...tpl, id: 4097 } };
+  const prodFetch = async (url, opts) => { calls.push(opts?.method || 'GET'); return { ok: url in prodResponses, status: 200, json: async () => JSON.parse(JSON.stringify(prodResponses[url])) }; };
+  const confirms = [];
+  const prod = tab('ucc.iqoption.com', '/email-templates/4097/edit', {
+    fetch: prodFetch, ace: { edit: () => ed }, HTMLInputElement, Event: class { constructor(t) { this.type = t; } },
+    confirm: (m) => { confirms.push(m); return true; },
+  });
+  prod.sandbox.document.querySelector = (q) => (q === '.ant-tabs-tab-active' ? { innerText: 'PT' } : q === '.ace_editor' ? {} : null);
+  prod.sandbox.document.querySelectorAll = (q) => (q === 'input' ? [subj] : []);
+  Object.setPrototypeOf(subj, HTMLInputElement.prototype);
+  for (const f of prod.timers) await f();
+  await tick(); await tick();
+  for (const f of ucc.timers) await f();
+  // INT видит PROD-вкладку в своём меню и отправляет
+  const intPresence = Object.values(store).filter((v) => v && v.host === 'ucc.iqoption.com' && v.id);
+  assert.equal(intPresence.length, 1, 'INT видит вкладку PROD');
+  const pill = ucc.dom.nodes.find((n) => n.id === 'retkit-ucc-pill' && !n.removed);
+  pill.onclick();
+  const prodItem = ucc.dom.nodes.filter((n) => typeof n.onclick === 'function').find((n) => n.children.some((c) => /^PROD:/.test(c.textContent || '')));
+  assert.ok(prodItem, 'в меню INT есть пункт «PROD: …»');
+  await prodItem.onclick();
+  await tick(); await tick(); await tick();
+  const insert = prod.dom.nodes.filter((n) => typeof n.onclick === 'function').find((n) => n.children.some((c) => /Вставить в открытую локаль PT/.test(c.textContent || '')));
+  assert.ok(insert, 'на PROD появилось «Вставить в открытую локаль PT»');
+  const before = calls.length;
+  insert.onclick();
+  assert.equal(ed.v, tpl.locales[1].html_body, 'HTML PT вставлен как есть (без замены футера)');
+  assert.equal(subj._v, 'Seu código', 'Subject PT вставлен');
+  assert.ok(subj.events.includes('input'), 'React узнал о новой теме');
+  assert.equal(confirms.length, 1, 'на PROD спрашивает подтверждение');
+  assert.ok(calls.slice(before).every((m) => m === 'GET'), 'ничего не сохраняет');
+}
+
 console.log('✓ ucc bridge: две вкладки через хранилище TM, присутствие, задание, перенос локалей + Subject + отправитель, ошибки по локали, только GET');

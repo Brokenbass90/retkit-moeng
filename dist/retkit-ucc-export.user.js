@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.8.2
+// @version      0.9.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -195,37 +195,9 @@
     const m = location.pathname.match(/\/email-templates\/(\d+)/);
     return m ? m[1] : null;
   }
-  function sync() {
-    const id = templateId();
-    let button = document.getElementById(BUTTON_ID);
-    if (!id) { button?.remove(); return; }
-    if (button) { button.dataset.id = id; return; }
-    button = document.createElement('button');
-    button.id = BUTTON_ID;
-    button.type = 'button';
-    button.dataset.id = id;
-    button.textContent = '⬇ ZIP письма';
-    button.title = 'RetKit: скачать все локали письма (HTML + Subject) и параметры одним архивом. Только чтение.';
-    Object.assign(button.style, {
-      position: 'fixed', right: '20px', bottom: '20px', zIndex: 99999, padding: '10px 16px',
-      borderRadius: '8px', border: 'none', background: '#3b5bfd', color: '#fff', font: '600 14px/1 sans-serif',
-      cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,.25)',
-    });
-    button.addEventListener('click', async () => {
-      const label = button.textContent;
-      button.disabled = true; button.textContent = '⬇ собираю…';
-      try {
-        const r = await exportZip(button.dataset.id);
-        button.textContent = `✓ ${r.locales} локалей`;
-      } catch (error) {
-        button.textContent = '✕ ошибка';
-        alert(`RetKit UCC Export: ${error.message}`);
-      } finally {
-        setTimeout(() => { button.disabled = false; button.textContent = label; }, 2500);
-      }
-    });
-    document.body.appendChild(button);
-  }
+  // Раньше тут была отдельная кнопка «⬇ ZIP письма». Теперь всё в одной кнопке RetKit (см. uccLink):
+  // ZIP, перенос в MoEngage, перенос в другое письмо UCC (INT ⇄ PROD). Старую кнопку убираем.
+  function sync() { document.getElementById(BUTTON_ID)?.remove(); }
 
   // ─── Мост в RetKit for MoEngage ───────────────────────────────────────────
   // Вкладки UCC и MoEngage — разные сайты. Связь — общее хранилище этого скрипта
@@ -362,68 +334,172 @@
     const moLabel = (t) => `${t.title || 'письмо MoEngage'}${t.campaign ? ` · …${String(t.campaign).slice(-4)}` : ''}`;
     function el2(tag, css, text) { const n = document.createElement(tag); if (css) n.style.cssText = css; if (text != null) n.textContent = text; return n; }
 
-    function openMenu() {
-      document.getElementById(MENU_ID)?.remove();
-      const tabs = moTabs();
-      const menu = el2('div', 'position:fixed;right:20px;bottom:112px;z-index:99999;width:360px;max-height:60vh;overflow:auto;background:#0f1722;color:#e6edf7;border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);font:12px/1.45 sans-serif;padding:12px 14px');
-      menu.id = MENU_ID;
-      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:13px;margin-bottom:8px', 'Перенос в MoEngage');
-      const x = el2('button', 'background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer', '×'); x.onclick = () => menu.remove(); head.append(x);
-      menu.append(head);
-      if (!tabs.length) {
-        menu.append(el2('div', 'color:#fbbf24', 'Нет открытых писем MoEngage. Откройте письмо в MoEngage (шаг контента) — оно появится здесь.'));
-      } else {
-        menu.append(el2('div', 'color:#7d8ba1;font-size:11px;text-transform:uppercase;margin:4px 0', 'Куда перенести'));
-        for (const t of tabs) {
-          const b = el2('button', 'display:block;width:100%;text-align:left;background:#152030;border:1px solid #243246;color:#e6edf7;border-radius:9px;padding:8px 10px;margin-bottom:6px;cursor:pointer;font:inherit');
-          b.append(el2('b', '', moLabel(t)), el2('span', 'color:#8a98ad;margin-left:6px', t.locales?.length ? `${t.locales.length} лок.: ${t.locales.join(', ')}` : ''));
-          b.onclick = () => send(t, menu);
-          menu.append(b);
-        }
+    // ─── UCC ⇄ UCC (INT ⇄ PROD): другие вкладки UCC и то, что пришло в эту ─────
+    const U2U = 'retkit.ucc.u2u';
+    const INCOMING_KEY = 'retkit.ucc.incoming';
+    const envName = (host) => (/\.int\./.test(host) ? 'INT' : 'PROD');
+    function uccTabs() {
+      const list = [];
+      for (const k of gm.keys()) {
+        if (!String(k).startsWith(PRESENCE_PREFIX)) continue;
+        const p = gm.get(k, null);
+        if (!p || p.tab === TAB || !p.id) continue;
+        if (now() - (p.ts || 0) < ALIVE_MS) list.push(p);
       }
-      document.body.appendChild(menu);
+      return list;
+    }
+    let incoming = null;
+    try { incoming = JSON.parse(sessionStorage.getItem(INCOMING_KEY) || 'null'); } catch {}
+    const saveIncoming = () => { try { incoming ? sessionStorage.setItem(INCOMING_KEY, JSON.stringify(incoming)) : sessionStorage.removeItem(INCOMING_KEY); } catch {} };
+
+    function activeLocale() {
+      const t = document.querySelector?.('.ant-tabs-tab-active');
+      return String(t?.innerText || t?.textContent || '').trim().toLowerCase();
+    }
+    function aceEditor() {
+      const el = document.querySelector?.('.ace_editor');
+      const ace = W.ace;
+      if (!el || !ace?.edit) throw new Error('редактор кода UCC не найден — откройте письмо');
+      return ace.edit(el);
+    }
+    function subjectInput() {
+      const inputs = [...(document.querySelectorAll?.('input') || [])];
+      return inputs.find((i) => /subject/i.test(i.closest?.('div')?.innerText || '')) || null;
+    }
+    function setSubject(input, text) {
+      const proto = W.HTMLInputElement?.prototype;
+      const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) setter.call(input, text); else input.value = text;
+      input.dispatchEvent(new W.Event('input', { bubbles: true }));
+      input.dispatchEvent(new W.Event('change', { bubbles: true }));
+    }
+    /** Вставить в ОТКРЫТУЮ локаль письма UCC её HTML и Subject из пришедшего письма. Ничего не сохраняет. */
+    function insertActive() {
+      if (!incoming) throw new Error('ничего не пришло');
+      const code = activeLocale();
+      const loc = incoming.locales.find((l) => l.code.toLowerCase() === code);
+      if (!loc) throw new Error(`в пришедшем письме нет локали ${code.toUpperCase() || '?'}`);
+      if (envName(location.host) === 'PROD' && !W.confirm?.(`Это PROD UCC. Вставить ${code.toUpperCase()} из «${incoming.from.name}» (${envName(incoming.from.host)}) в редактор?\nСохранение — только вашей кнопкой Save.`)) return null;
+      const ed = aceEditor();
+      ed.setValue(loc.html, -1);
+      if (ed.getValue() !== loc.html) throw new Error('редактор не принял код');
+      const subj = subjectInput();
+      if (subj) setSubject(subj, loc.subject);
+      incoming.done = { ...(incoming.done || {}), [code]: true };
+      saveIncoming();
+      return { code, subject: Boolean(subj) };
     }
 
-    async function send(target, menu) {
-      const out = el2('div', 'margin-top:8px;color:#cbd5e1;white-space:pre-wrap', 'Читаю письмо UCC…');
-      menu.append(out);
+    gm.on(U2U, (msg, remote) => {
+      if (!remote || !msg || msg.targetTab !== TAB || now() - (msg.ts || 0) > 120000) return;
+      incoming = { from: msg.from, locales: msg.locales, ts: msg.ts, done: {} };
+      saveIncoming();
+      openMenu();
+    });
+
+    async function sendToUcc(target, out) {
+      out.textContent = 'Читаю письмо…';
       try {
         const mail = await collect(templateId());
-        activeRequest = `push-${mail.id}-${now().toString(36)}`;
-        gm.set(KEY.push, { requestId: activeRequest, ts: now(), targetTab: target.tab, auto: true, transfer: transferFor(mail) });
-        out.textContent = `Отправлено в «${moLabel(target)}» — переношу…`;
+        gm.set(U2U, {
+          ts: now(), targetTab: target.tab,
+          from: { host: location.host, id: mail.id, name: mail.name, microservice: mail.microservice },
+          locales: mail.locales.map((l) => ({ code: l.code, subject: l.subject, html: l.html })),
+        });
+        out.textContent = `Отправлено в ${envName(target.host)} «${target.name || target.id}». Там откроется окно — вставляйте по локалям и сохраняйте в UCC.`;
+        out.style.color = '#86efac';
       } catch (error) {
         out.textContent = `Ошибка: ${error?.message || error}`;
         out.style.color = '#fecaca';
       }
     }
-    gm.on(KEY.status, (st) => {
-      if (!st || st.requestId !== activeRequest) return;
-      const menu = document.getElementById(MENU_ID);
-      const out = menu?.lastElementChild;
-      if (!out) return;
-      if (st.state === 'running') out.textContent = `Переношу… ${st.done || 0}/${st.total || '?'}${st.last ? `\n${st.last}` : ''}`;
-      if (st.state === 'done') { out.textContent = st.failed ? `Перенесено ${st.ok}, ошибок ${st.failed} — подробности в окне RetKit (MoEngage)` : `✓ Перенесено ${st.ok} лок. Сохраните кампанию в MoEngage.`; out.style.color = st.failed ? '#fbbf24' : '#86efac'; }
-      if (st.state === 'error') { out.textContent = `✕ ${st.error || 'ошибка'}`; out.style.color = '#fecaca'; }
-    });
+
+    function section(menu, title) { menu.append(el2('div', 'color:#7d8ba1;font-size:11px;text-transform:uppercase;margin:10px 0 4px', title)); }
+    function itemButton(label, sub, onClick) {
+      const b = el2('button', 'display:block;width:100%;text-align:left;background:#152030;border:1px solid #243246;color:#e6edf7;border-radius:9px;padding:8px 10px;margin-bottom:6px;cursor:pointer;font:inherit');
+      b.append(el2('b', '', label));
+      if (sub) b.append(el2('span', 'color:#8a98ad;margin-left:6px', sub));
+      b.onclick = onClick;
+      return b;
+    }
+
+    function openMenu() {
+      document.getElementById(MENU_ID)?.remove();
+      const menu = el2('div', 'position:fixed;right:20px;bottom:64px;z-index:99999;width:380px;max-height:70vh;overflow:auto;background:#0f1722;color:#e6edf7;border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);font:12px/1.45 sans-serif;padding:12px 14px');
+      menu.id = MENU_ID;
+      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:13px', `RetKit · UCC ${envName(location.host)}`);
+      const x = el2('button', 'background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer', '×'); x.onclick = () => menu.remove(); head.append(x);
+      menu.append(head);
+      const out = el2('div', 'margin-top:8px;color:#cbd5e1;white-space:pre-wrap');
+
+      // Пришло из другого UCC — вставка по локалям.
+      if (incoming) {
+        const cur = metaCache.get(templateId()) || {};
+        section(menu, `Пришло из UCC ${envName(incoming.from.host)}`);
+        const same = cur.name && cur.name === incoming.from.name && (cur.microservice || '') === (incoming.from.microservice || '');
+        menu.append(el2('div', `color:${same ? '#cbd5e1' : '#fbbf24'};margin-bottom:6px`,
+          `«${incoming.from.name}» (${incoming.from.microservice || '—'}, id ${incoming.from.id})${same ? '' : `\n⚠ Открыто другое письмо: «${cur.name || '?'}»`}`));
+        const chips = el2('div', 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px');
+        const act = activeLocale();
+        for (const l of incoming.locales) {
+          const c = l.code.toLowerCase();
+          const done = incoming.done?.[c];
+          chips.append(el2('span', `padding:2px 7px;border-radius:6px;background:${done ? '#14532d' : c === act ? '#1d4ed8' : '#1e293b'};color:#e6edf7`, `${done ? '✓ ' : ''}${c.toUpperCase()}`));
+        }
+        menu.append(chips);
+        menu.append(itemButton(`Вставить в открытую локаль ${act.toUpperCase() || '?'}`, 'HTML + Subject, без сохранения', () => {
+          try {
+            const r = insertActive();
+            if (!r) return;
+            out.textContent = `✓ ${r.code.toUpperCase()} вставлена${r.subject ? '' : ' (поле Subject не найдено — вставьте тему вручную)'}. Проверьте и нажмите Save в UCC, затем откройте следующую локаль.`;
+            out.style.color = '#86efac';
+            openMenu();
+          } catch (error) { out.textContent = `✕ ${error.message}`; out.style.color = '#fecaca'; menu.append(out); }
+        }));
+        menu.append(itemButton('Убрать пришедшее', '', () => { incoming = null; saveIncoming(); openMenu(); }));
+      }
+
+      section(menu, 'Это письмо');
+      menu.append(itemButton('⬇ ZIP письма', 'все локали: HTML + Subject + параметры', async () => {
+        out.textContent = 'Собираю ZIP…'; menu.append(out);
+        try { const r = await exportZip(templateId()); out.textContent = `✓ ZIP: ${r.locales} локалей`; out.style.color = '#86efac'; }
+        catch (error) { out.textContent = `✕ ${error.message}`; out.style.color = '#fecaca'; }
+      }));
+
+      section(menu, '→ MoEngage');
+      const mo = moTabs();
+      if (!mo.length) menu.append(el2('div', 'color:#8a98ad', 'Нет открытых писем MoEngage (откройте письмо на шаге контента).'));
+      for (const t of mo) menu.append(itemButton(moLabel(t), t.locales?.length ? `${t.locales.length} лок.: ${t.locales.join(', ')}` : '', () => send(t, menu)));
+
+      section(menu, '→ Другое письмо UCC (INT ⇄ PROD)');
+      const ut = uccTabs();
+      const mine = metaCache.get(templateId()) || {};
+      if (!ut.length) menu.append(el2('div', 'color:#8a98ad', 'Откройте целевое письмо UCC в другой вкладке (PROD или INT) — оно появится здесь.'));
+      for (const t of ut) {
+        const match = mine.name && t.name === mine.name && (t.microservice || '') === (mine.microservice || '');
+        menu.append(itemButton(`${envName(t.host)}: ${t.name || `id ${t.id}`}`, `${match ? '✓ то же письмо' : '⚠ другое имя'} · ${t.locales || '?'} лок.`, () => { menu.append(out); sendToUcc(t, out); }));
+      }
+      menu.append(out);
+      document.body.appendChild(menu);
+    }
 
     function syncPill() {
       const id = templateId();
       let pill = document.getElementById(PILL_ID);
       if (!id) { pill?.remove(); document.getElementById(MENU_ID)?.remove(); return; }
       if (!pill) {
-        pill = el2('button', 'position:fixed;right:20px;bottom:64px;z-index:99999;padding:9px 14px;border-radius:999px;border:0;font:600 13px/1 sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);display:flex;align-items:center;gap:7px;cursor:pointer;max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
+        pill = el2('button', 'position:fixed;right:20px;bottom:20px;z-index:99999;padding:10px 16px;border-radius:999px;border:0;font:600 13px/1 sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);display:flex;align-items:center;gap:7px;cursor:pointer;max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
         pill.id = PILL_ID; pill.type = 'button';
         pill.onclick = () => (document.getElementById(MENU_ID) ? document.getElementById(MENU_ID).remove() : openMenu());
         document.body.appendChild(pill);
       }
-      const tabs = moTabs();
-      pill.style.background = tabs.length ? '#15803d' : '#0f1722';
+      const links = moTabs().length + uccTabs().length;
+      pill.style.background = incoming ? '#b45309' : links ? '#15803d' : '#3b5bfd';
       pill.style.color = '#fff';
       pill.textContent = '';
-      const d = el2('span', `width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:${tabs.length ? '#4ade80' : '#64748b'}`);
-      pill.append(d, document.createTextNode(!tabs.length ? 'MoEngage: письмо не открыто' : (tabs.length === 1 ? `→ MoEngage: ${moLabel(tabs[0])}` : `→ MoEngage: ${tabs.length} письма`)));
-      pill.title = tabs.length ? 'Нажмите — выбрать письмо MoEngage и перенести туда' : 'Откройте письмо в MoEngage — мост появится здесь.';
+      const d = el2('span', `width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:${links ? '#4ade80' : '#cbd5e1'}`);
+      pill.append(d, document.createTextNode(incoming ? `RetKit ▾ · пришло из ${envName(incoming.from.host)}` : `RetKit ▾${links ? ` · на связи: ${links}` : ''}`));
+      pill.title = 'RetKit: ZIP письма, перенос в MoEngage, перенос в другое письмо UCC';
     }
     syncPill();
     setInterval(syncPill, 2000);
@@ -479,7 +555,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.8.2',
+      version: '0.9.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -558,7 +634,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.8.2' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.9.0' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -580,7 +656,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.8.2' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.9.0' }).catch(() => {});
     loop();
   }
 
