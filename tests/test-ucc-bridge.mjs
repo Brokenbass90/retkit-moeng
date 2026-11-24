@@ -26,10 +26,12 @@ function fakeDom() {
   const make = (tag) => {
     const n = { tag, style: {}, dataset: {}, children: [], textContent: '', id: '', listeners: {}, isConnected: true,
       appendChild(c) { this.children.push(c); return c; }, append(...c) { this.children.push(...c); }, insertBefore(c) { this.children.push(c); },
-      addEventListener(t, f) { this.listeners[t] = f; }, remove() { this.removed = true; this.isConnected = false; }, click() {} };
+      addEventListener(t, f) { this.listeners[t] = f; }, remove() { this.removed = true; this.isConnected = false; }, click() {},
+      contains(x) { return x === this || this.children.some((c) => c && typeof c.contains === 'function' && c.contains(x)); } };
     nodes.push(n); return n;
   };
-  return { nodes, document: { getElementById: (id) => nodes.find((n) => n.id === id && !n.removed) || null, createElement: make, createTextNode: (t) => ({ t }), body: make('body') } };
+  const docListeners = {};
+  return { nodes, document: { docListeners, addEventListener: (t, f) => { docListeners[t] = f; }, getElementById: (id) => nodes.find((n) => n.id === id && !n.removed) || null, createElement: make, createTextNode: (t) => ({ t }), body: make('body') } };
 }
 function tab(host, pathname, extra = {}) {
   const dom = fakeDom();
@@ -206,6 +208,21 @@ assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not k
   assert.ok(subj.events.includes('input'), 'React узнал о новой теме');
   assert.equal(confirms.length, 1, 'на PROD спрашивает подтверждение');
   assert.ok(calls.slice(before).every((m) => m === 'GET'), 'ничего не сохраняет');
+}
+
+// 7. Клик мимо окна закрывает его, клик внутри — нет
+{
+  const t2 = tab('ucc.int.iqoption.com', '/email-templates/15928/edit', { fetch });
+  for (const f of t2.timers) await f();
+  const pill = t2.dom.nodes.find((n) => n.id === 'retkit-ucc-pill' && !n.removed);
+  pill.onclick();
+  const menu = () => t2.dom.nodes.find((n) => n.id === 'retkit-ucc-menu' && !n.removed);
+  const down = t2.dom.document.docListeners.mousedown;
+  assert.ok(menu() && down, 'окно открыто, слушатель стоит');
+  down({ target: menu().children[0] });
+  assert.ok(menu(), 'клик внутри окна — не закрывает');
+  down({ target: { outside: true } });
+  assert.ok(!menu(), 'клик мимо окна — закрывает');
 }
 
 console.log('✓ ucc bridge: две вкладки через хранилище TM, присутствие, задание, перенос локалей + Subject + отправитель, ошибки по локали, только GET');
