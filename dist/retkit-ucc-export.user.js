@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.13.1
+// @version      0.13.2
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
 // @match        https://dashboard-02.moengage.com/*
 // @match        http://localhost:3000/*
 // @match        http://127.0.0.1:3000/*
+// @match        https://retention-tool-kit-127e48dd48c6.herokuapp.com/*
 // @updateURL    https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-ucc-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/Brokenbass90/retkit-moeng/main/dist/retkit-ucc-export.user.js
 // @grant        GM_getValue
@@ -47,7 +48,7 @@
   if (W.__retkitUccExport) return;
   const IS_UCC = /(^|\.)ucc(\.int)?\.iqoption\.com$/.test(location.host);
   // Студия RetKit (Retention Future) на своей машине: «Код» → перенос локалей в UCC.
-  const IS_STUDIO = /^(localhost|127\.0\.0\.1):3000$/.test(location.host);
+  const IS_STUDIO = /^(localhost|127\.0\.0\.1):3000$/.test(location.host) || /^retention-tool-kit[\w-]*\.herokuapp\.com$/.test(location.host);
 
   // ─── ZIP без зависимостей (метод STORE) ───────────────────────────────────
   const CRC = (() => {
@@ -803,7 +804,7 @@
         };
       }
       // Студия сама рисует кнопку «Перенести в UCC» (нижняя панель «Кода») и зовёт этот мост.
-      try { W.__retkitUccBridge = { version: '0.13.1', openFromStudio: () => openTransfer(studioSource()) }; } catch {}
+      try { W.__retkitUccBridge = { version: '0.13.2', openFromStudio: () => openTransfer(studioSource()) }; } catch {}
       function syncStudio() {
         let b = document.getElementById(PILL_ID);
         const api = studioApi();
@@ -883,7 +884,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.13.1',
+      version: '0.13.2',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -962,7 +963,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.13.1' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.13.2' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -984,7 +985,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.13.1' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.13.2' }).catch(() => {});
     loop();
   }
 
