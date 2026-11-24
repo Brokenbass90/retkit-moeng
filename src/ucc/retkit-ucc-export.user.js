@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.12.0
+// @version      0.13.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -802,10 +802,13 @@
           from: (src) => ({ host: 'studio', label: 'студии', id: 'studio', name: src.name, microservice: '' }),
         };
       }
+      // Студия сама рисует кнопку «Перенести в UCC» (нижняя панель «Кода») и зовёт этот мост.
+      try { W.__retkitUccBridge = { version: '0.13.0', openFromStudio: () => openTransfer(studioSource()) }; } catch {}
       function syncStudio() {
         let b = document.getElementById(PILL_ID);
         const api = studioApi();
-        if (!api) { b?.remove(); return; } // не «Код» (или старая студия)
+        // Своя кнопка студии есть — плавающая не нужна.
+        if (!api || document.getElementById('toUccBtn')) { b?.remove(); return; }
         const info = api.info?.() || { locales: [] };
         const n = (info.locales || []).length;
         if (!b) {
@@ -880,7 +883,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.12.0',
+      version: '0.13.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -959,7 +962,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.12.0' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.13.0' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -981,7 +984,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.12.0' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.13.0' }).catch(() => {});
     loop();
   }
 
