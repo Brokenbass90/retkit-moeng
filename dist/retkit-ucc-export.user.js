@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.11.0
+// @version      0.11.1
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -709,16 +709,23 @@
       }
       function syncStudio() {
         let b = document.getElementById(PILL_ID);
-        const info = studioApi()?.info?.();
-        if (!info || !(info.locales || []).length) { b?.remove(); return; }
+        const api = studioApi();
+        if (!api) { b?.remove(); return; } // не «Код» (или старая студия)
+        const info = api.info?.() || { locales: [] };
+        const n = (info.locales || []).length;
         if (!b) {
           b = el2('button', 'position:fixed;left:20px;bottom:20px;z-index:99999;padding:10px 16px;border-radius:999px;border:0;background:#3b5bfd;color:#fff;font:600 13px/1 sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer');
           b.id = PILL_ID; b.type = 'button';
           b.title = 'RetKit: перенести локали этого письма в письмо UCC (INT или PROD)';
-          b.onclick = () => (document.getElementById(MENU_ID) ? document.getElementById(MENU_ID).remove() : openTransfer(studioSource()));
+          b.onclick = () => {
+            if (document.getElementById(MENU_ID)) { document.getElementById(MENU_ID).remove(); return; }
+            if (!(studioApi()?.info?.()?.locales || []).length) { W.alert?.('RetKit → UCC: откройте письмо с локалями (из базы или HTML + папка локалей) — тогда его можно перенести в UCC.'); return; }
+            openTransfer(studioSource());
+          };
           document.body.appendChild(b);
         }
-        b.textContent = `→ UCC · ${(info.locales || []).length} лок.`;
+        b.textContent = n ? `→ UCC · ${n} лок.` : '→ UCC';
+        b.style.opacity = n ? '1' : '.6';
       }
       syncStudio();
       setInterval(syncStudio, 2000);
@@ -778,7 +785,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.11.0',
+      version: '0.11.1',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -857,7 +864,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.11.0' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.11.1' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -879,7 +886,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.11.0' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.11.1' }).catch(() => {});
     loop();
   }
 
