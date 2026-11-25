@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.14.0
+// @version      0.15.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -125,8 +125,8 @@
     }
     return [];
   }
-  async function collect(id) {
-    const tpl = await getJson(`/api/email/templates/${id}`);
+  async function collect(id, kind = pageKind()) {
+    const tpl = await getJson(`${apiOf(kind)}/${id}`);
     const [senders, categories] = await Promise.all([
       getSenders(tpl),
       getJson('/api/email/categories').then(asList).catch(() => []),
@@ -143,7 +143,8 @@
     }));
     return {
       id: tpl.id,
-      name: tpl.name || `template-${id}`,
+      kind,
+      name: tpl.name || `${kind === 'preset' ? 'preset' : 'template'}-${id}`,
       host: location.host,
       microservice: tpl.microservice_name || tpl.microservice?.Name || '',
       microserviceTitle: tpl.microservice?.Title || '',
@@ -164,7 +165,7 @@
     const params = [
       `Name: ${mail.name}`,
       `Template ID: ${mail.id}`,
-      `UCC: https://${mail.host}/email-templates/${mail.id}/edit`,
+      `UCC: ${uccUrl(mail.host, mail.kind, mail.id)}`,
       `Microservice: ${mail.microservice}${mail.microserviceTitle && mail.microserviceTitle !== mail.microservice ? ` (${mail.microserviceTitle})` : ''}`,
       `Sender: ${mail.sender}`,
       `Category: ${mail.category}`,
@@ -199,10 +200,21 @@
 
   // ─── Кнопка ───────────────────────────────────────────────────────────────
   const BUTTON_ID = 'retkit-ucc-export';
-  function templateId() {
-    const m = location.pathname.match(/\/email-templates\/(\d+)/);
-    return m ? m[1] : null;
+  // UCC: письма (/email-templates/<id>) и пресеты (/presets/<id>). API у них одинаковый,
+  // отличается только путь: /api/email/templates/<id> и /api/email/presets/<id> (chunk 1384).
+  const KINDS = {
+    email: { page: 'email-templates', api: '/api/email/templates', word: 'письмо' },
+    preset: { page: 'presets', api: '/api/email/presets', word: 'пресет' },
+  };
+  function pageRef() {
+    const m = location.pathname.match(/\/(email-templates|presets)\/(\d+)/);
+    return m ? { kind: m[1] === 'presets' ? 'preset' : 'email', id: m[2] } : null;
   }
+  function templateId() { return pageRef()?.id || null; }
+  function pageKind() { return pageRef()?.kind || 'email'; }
+  function apiOf(kind) { return (KINDS[kind] || KINDS.email).api; }
+  function uccUrl(host, kind, id) { return `https://${host}/${(KINDS[kind] || KINDS.email).page}/${id}/edit`; }
+  const wordOf = (kind) => (KINDS[kind] || KINDS.email).word;
   // Раньше тут была отдельная кнопка «⬇ ZIP письма». Теперь всё в одной кнопке RetKit (см. uccLink):
   // ZIP, перенос в MoEngage, перенос в другое письмо UCC (INT ⇄ PROD). Старую кнопку убираем.
   function sync() { document.getElementById(BUTTON_ID)?.remove(); }
@@ -267,7 +279,7 @@
     const en = locales.find((l) => l.ucc === 'EN');
     if (defaultFromEn && en) locales.unshift({ ...en, mo: 'Default' });
     return {
-      id: mail.id, name: mail.name, host: mail.host, uccUrl: `https://${mail.host}/email-templates/${mail.id}/edit`,
+      id: mail.id, name: mail.name, host: mail.host, uccUrl: uccUrl(mail.host, mail.kind, mail.id),
       microservice: mail.microservice, sender: mail.sender, senderEmail: mail.senderEmail || '', senderName: mail.senderName || '',
       category: mail.category, locales, skipped, empty, placeholders,
       footerLeftovers: Object.keys(MAP.replace).filter((k) => locales.some((l) => l.html.includes(k))),
@@ -297,21 +309,22 @@
     async function heartbeat() {
       const id = templateId();
       if (!id) { gm.set(PRESENCE_PREFIX + TAB, { ts: now(), tab: TAB, host: location.host, id: null }); return; }
-      let meta = metaCache.get(id);
+      const kind = pageKind();
+      let meta = metaCache.get(`${kind}:${id}`);
       if (!meta) {
         meta = { name: '', microservice: '' };
-        metaCache.set(id, meta);
-        getJson(`/api/email/templates/${id}`).then((tpl) => {
+        metaCache.set(`${kind}:${id}`, meta);
+        getJson(`${apiOf(kind)}/${id}`).then((tpl) => {
           meta.name = tpl.name || ''; meta.microservice = tpl.microservice_name || tpl.microservice?.Name || '';
           meta.locales = (tpl.locales || []).length;
-        }).catch(() => metaCache.delete(id));
+        }).catch(() => metaCache.delete(`${kind}:${id}`));
       }
-      gm.set(PRESENCE_PREFIX + TAB, { ts: now(), tab: TAB, host: location.host, id, name: meta.name, microservice: meta.microservice, locales: meta.locales || 0 });
+      gm.set(PRESENCE_PREFIX + TAB, { ts: now(), tab: TAB, host: location.host, id, kind, name: meta.name, microservice: meta.microservice, locales: meta.locales || 0 });
     }
     gm.on(KEY.pull, async (req, remote) => {
       if (!remote || !req?.requestId || now() - (req.ts || 0) > 60000) return;
       const id = templateId();
-      if (!id || (req.id && String(req.id) !== String(id)) || (req.host && req.host !== location.host)) return; // спрашивают не про наше письмо
+      if (!id || pageKind() !== 'email' || (req.id && String(req.id) !== String(id)) || (req.host && req.host !== location.host)) return; // спрашивают не про наше письмо
       try {
         const mail = await collect(id);
         gm.set(KEY.reply, { requestId: req.requestId, ts: now(), transfer: transferFor(mail) });
@@ -356,16 +369,17 @@
     const GUIDE_ID = 'retkit-ucc-guide';
     const envName = (host) => (/\.int\./.test(host) ? 'INT' : 'PROD');
     const otherHost = (host) => (/\.int\./.test(host) ? host.replace('.int.', '.') : host.replace(/^ucc\./, 'ucc.int.'));
-    const jobKey = (host, id) => `${host}:${id}`;
+    const jobKey = (host, id, kind) => (kind === 'preset' ? `${host}:preset:${id}` : `${host}:${id}`);
+    const myMeta = () => metaCache.get(`${pageKind()}:${templateId()}`) || {};
     const getJobs = () => gm.get(JOBS, {}) || {};
-    const myJob = () => { const id = templateId(); return id ? getJobs()[jobKey(location.host, id)] || null : null; };
+    const myJob = () => { const id = templateId(); return id ? getJobs()[jobKey(location.host, id, pageKind())] || null : null; };
     function saveJob(job) {
       const all = getJobs();
       for (const [k, j] of Object.entries(all)) if (now() - (j.ts || 0) > 24 * 3600 * 1000) delete all[k];
-      if (job) all[jobKey(job.to.host, job.to.id)] = job;
+      if (job) all[jobKey(job.to.host, job.to.id, job.to.kind)] = job;
       gm.set(JOBS, all);
     }
-    function dropJob(job) { const all = getJobs(); delete all[jobKey(job.to.host, job.to.id)]; gm.set(JOBS, all); }
+    function dropJob(job) { const all = getJobs(); delete all[jobKey(job.to.host, job.to.id, job.to.kind)]; gm.set(JOBS, all); }
 
     function uccTabs() {
       const list = [];
@@ -378,20 +392,20 @@
       // Одно письмо в нескольких вкладках — один пункт (самый свежий сигнал).
       const seen = new Map();
       for (const p of list.sort((a, b) => (b.ts || 0) - (a.ts || 0))) {
-        const key = `${p.host}:${p.id}`;
+        const key = `${p.host}:${p.kind || 'email'}:${p.id}`;
         if (!seen.has(key)) seen.set(key, p);
       }
       return [...seen.values()];
     }
 
     /** Чтение письма в другом UCC (другой сайт) — через Tampermonkey, с входом человека. Только GET. */
-    function readOther(host, id) {
-      if (host === location.host) return getJson(`/api/email/templates/${id}`);
+    function readOther(host, id, kind = 'email') {
+      if (host === location.host) return getJson(`${apiOf(kind)}/${id}`);
       return new Promise((resolve, reject) => {
         const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest);
         if (!xhr) { reject(new Error('Tampermonkey не дал доступ к другому UCC')); return; }
         xhr({
-          method: 'GET', url: `https://${host}/api/email/templates/${id}`, headers: { Accept: 'application/json' },
+          method: 'GET', url: `https://${host}${apiOf(kind)}/${id}`, headers: { Accept: 'application/json' },
           onload: (r) => {
             if (r.status === 401 || r.status === 403) { reject(new Error(`нет входа в UCC ${envName(host)} — откройте его и войдите`)); return; }
             if (r.status < 200 || r.status >= 300) { reject(new Error(`UCC ${envName(host)}: HTTP ${r.status}`)); return; }
@@ -401,12 +415,12 @@
         });
       });
     }
-    /** «https://ucc.iqoption.com/email-templates/4097/edit» или «4097» → { host, id } */
-    function parseTarget(text, fallbackHost) {
+    /** «…/email-templates/4097/edit», «…/presets/121/edit» или «4097» → { host, id, kind } */
+    function parseTarget(text, fallbackHost, fallbackKind = 'email') {
       const s = String(text || '').trim();
-      const m = s.match(/https?:\/\/([^/]+)\/email-templates\/(\d+)/);
-      if (m) return { host: m[1], id: m[2] };
-      if (/^\d+$/.test(s)) return { host: fallbackHost, id: s };
+      const m = s.match(/https?:\/\/([^/]+)\/(email-templates|presets)\/(\d+)/);
+      if (m) return { host: m[1], id: m[3], kind: m[2] === 'presets' ? 'preset' : 'email' };
+      if (/^\d+$/.test(s)) return { host: fallbackHost, id: s, kind: fallbackKind };
       return null;
     }
     const codesOf = (tpl) => (tpl.locales || []).map((l) => String(l.locale?.short_name || l.locale?.name || '').toLowerCase()).filter(Boolean);
@@ -414,14 +428,16 @@
     // ─── Окно переноса (в письме-источнике) ───────────────────────────────────
     /** Источник переноса: это письмо UCC (по умолчанию) или студия. */
     function uccSource() {
-      const mine = metaCache.get(templateId()) || {};
+      const mine = myMeta();
+      const kind = pageKind();
       return {
-        title: `Перенос ${envName(location.host)} → ${envName(otherHost(location.host))}`,
+        kind,
+        title: `Перенос ${kind === 'preset' ? 'пресета ' : ''}${envName(location.host)} → ${envName(otherHost(location.host))}`,
         fromLabel: `Откуда · UCC ${envName(location.host)}`,
         fromText: `${mine.name || `id ${templateId()}`}${mine.microservice ? ` · ${mine.microservice}` : ''} · ${mine.locales || '?'} лок.`,
         name: mine.name, microservice: mine.microservice,
         toHost: otherHost(location.host), anyEnv: false,
-        collect: () => collect(templateId()),
+        collect: () => collect(templateId(), kind),
         from: (src) => ({ host: location.host, label: envName(location.host), id: src.id, name: src.name, microservice: src.microservice }),
       };
     }
@@ -446,21 +462,22 @@
         for (const h of ['ucc.int.iqoption.com', 'ucc.iqoption.com']) {
           const b = el2('button', 'flex:1;padding:5px;border-radius:7px;border:1px solid #334155;cursor:pointer;font:600 12px sans-serif', envName(h));
           const paint = () => { b.style.background = toHost === h ? '#2563eb' : '#1e293b'; b.style.color = '#fff'; };
-          b.onclick = () => { toHost = h; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.placeholder = `ссылка на письмо ${envName(toHost)} или его номер`; check(); };
+          b.onclick = () => { toHost = h; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.placeholder = `ссылка на письмо или пресет ${envName(toHost)} (или номер письма)`; check(); };
           paints.push(paint); paint();
           envRow.append(b);
         }
         toCard.append(envRow);
       }
       const open = uccTabs().filter((t) => source.anyEnv || t.host === toHost);
-      const same = open.find((t) => mine.name && t.name === mine.name && t.host === toHost && (t.microservice || '') === (mine.microservice || ''));
+      const srcKind = source.kind || 'email';
+      const same = open.find((t) => mine.name && t.name === mine.name && t.host === toHost && (t.kind || 'email') === srcKind && (t.microservice || '') === (mine.microservice || ''));
       const input = el2('input', 'width:100%;box-sizing:border-box;margin-top:6px;padding:7px 9px;border-radius:7px;border:1px solid #334155;background:#0b1220;color:#e6edf7;font:inherit');
-      input.placeholder = `ссылка на письмо ${envName(toHost)} или его номер`;
-      if (same) input.value = `https://${same.host}/email-templates/${same.id}/edit`;
+      input.placeholder = `ссылка на письмо или пресет ${envName(toHost)} (или номер письма)`;
+      if (same) input.value = uccUrl(same.host, same.kind, same.id);
       toCard.append(input);
       for (const t of open) {
-        const b = el2('button', 'display:inline-block;margin:6px 6px 0 0;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e6edf7;cursor:pointer;font:inherit', `открыто${source.anyEnv ? ` ${envName(t.host)}` : ''}: ${t.name || `id ${t.id}`}`);
-        b.onclick = () => { toHost = t.host; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.value = `https://${t.host}/email-templates/${t.id}/edit`; check(); };
+        const b = el2('button', 'display:inline-block;margin:6px 6px 0 0;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e6edf7;cursor:pointer;font:inherit', `открыто${source.anyEnv ? ` ${envName(t.host)}` : ''}: ${t.kind === 'preset' ? 'пресет ' : ''}${t.name || 'без имени'} #${t.id}`);
+        b.onclick = () => { toHost = t.host; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.value = uccUrl(t.host, t.kind, t.id); check(); };
         toCard.append(b);
       }
       box.append(toCard);
@@ -472,11 +489,11 @@
       input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(check, 400); });
       async function check() {
         result.textContent = '';
-        const target = parseTarget(input.value, toHost);
-        if (!target) { if (input.value.trim()) result.append(el2('div', 'color:#fbbf24', 'Нужна ссылка вида …/email-templates/4097/edit или номер письма.')); return; }
+        const target = parseTarget(input.value, toHost, srcKind);
+        if (!target) { if (input.value.trim()) result.append(el2('div', 'color:#fbbf24', 'Нужна ссылка вида …/email-templates/4097/edit, …/presets/121/edit или номер письма.')); return; }
         result.append(el2('div', 'color:#94a3b8', 'Читаю оба письма…'));
         try {
-          const [src, dst] = await Promise.all([source.collect(), readOther(target.host, target.id)]);
+          const [src, dst] = await Promise.all([source.collect(), readOther(target.host, target.id, target.kind)]);
           result.textContent = '';
           const dstCodes = codesOf(dst);
           const srcCodes = src.locales.map((l) => l.code.toLowerCase());
@@ -484,7 +501,7 @@
           const noTarget = srcCodes.filter((c) => !dstCodes.includes(c));
           const onlyTarget = dstCodes.filter((c) => !srcCodes.includes(c));
           const sameName = !src.name || dst.name === src.name;
-          result.append(el2('div', `font-weight:600;color:${sameName ? '#86efac' : '#fbbf24'}`, `${sameName ? '✓' : '⚠'} ${envName(target.host)}: «${dst.name}» (${dst.microservice_name || '—'})${sameName ? '' : ' — имя не совпадает'}`));
+          result.append(el2('div', `font-weight:600;color:${sameName ? '#86efac' : '#fbbf24'}`, `${sameName ? '✓' : '⚠'} ${envName(target.host)} · ${wordOf(target.kind)}: «${dst.name}» (${dst.microservice_name || '—'})${sameName ? '' : ' — имя не совпадает'}`));
           const legend = (list, color, title) => {
             if (!list.length) return;
             const row = el2('div', 'margin-top:6px');
@@ -498,18 +515,18 @@
           legend(both, '#14532d', `Перенесётся (${both.length}): ${hasSubjects ? 'код + Subject' : 'код (тема остаётся как в UCC)'}`);
           legend(noTarget, '#7c2d12', `Нет в ${envName(target.host)} (${noTarget.length}): добавьте локаль «+» в целевом письме — потом перенесётся`);
           legend(onlyTarget, '#334155', `Есть только в ${envName(target.host)} (${onlyTarget.length}): не трогаем`);
-          const go = el2('button', 'display:block;width:100%;margin-top:12px;padding:10px;border-radius:9px;border:0;background:#2563eb;color:#fff;font:600 13px sans-serif;cursor:pointer', `Открыть письмо ${envName(target.host)} и перенести →`);
+          const go = el2('button', 'display:block;width:100%;margin-top:12px;padding:10px;border-radius:9px;border:0;background:#2563eb;color:#fff;font:600 13px sans-serif;cursor:pointer', `Открыть ${wordOf(target.kind)} ${envName(target.host)} и перенести →`);
           go.onclick = () => {
             saveJob({
               ts: now(),
               from: source.from(src),
-              to: { host: target.host, id: String(target.id), name: dst.name },
+              to: { host: target.host, id: String(target.id), kind: target.kind, name: dst.name },
               locales: src.locales.map((l) => ({ code: l.code.toLowerCase(), subject: l.subject, html: l.html })),
               done: {},
             });
-            const tabOpen = open.find((t) => String(t.id) === String(target.id));
+            const tabOpen = open.find((t) => String(t.id) === String(target.id) && t.host === target.host && (t.kind || 'email') === target.kind);
             if (tabOpen) { result.append(el2('div', 'margin-top:8px;color:#86efac', `Задание отправлено во вкладку ${envName(target.host)} — перейдите туда.`)); return; }
-            W.open(`https://${target.host}/email-templates/${target.id}/edit`, '_blank');
+            W.open(uccUrl(target.host, target.kind, target.id), '_blank');
             box.remove();
           };
           result.append(go);
@@ -614,8 +631,8 @@
       if (st.state === 'error') { out.textContent = `✕ ${st.error || 'ошибка'}`; out.style.color = '#fecaca'; }
     });
     function uccMoSource() {
-      const mine = metaCache.get(templateId()) || {};
-      return { label: `UCC ${envName(location.host)}`, text: `${mine.name || `id ${templateId()}`} · ${mine.locales || '?'} лок.`, collect: () => collect(templateId()) };
+      const mine = myMeta();
+      return { label: `UCC ${envName(location.host)}`, text: `${pageKind() === 'preset' ? 'пресет ' : ''}${mine.name || `id ${templateId()}`} · ${mine.locales || '?'} лок.`, collect: () => collect(templateId()) };
     }
 
     // ─── Помощник в целевом письме ────────────────────────────────────────────
@@ -700,7 +717,7 @@
     }
     async function autoTransferAll(job, report) {
       const id = templateId();
-      const base = `/api/email/templates/${id}`;
+      const base = `${apiOf(pageKind())}/${id}`;
       let tpl = await getJson(base);
       const have = new Map((tpl.locales || []).map((l) => [String(l.locale?.short_name || '').toLowerCase(), l]));
       const missing = job.locales.map((l) => l.code).filter((c) => !have.has(c));
@@ -708,7 +725,7 @@
       const creatable = missing.filter((c) => catalog[c] != null);
       const unknown = missing.filter((c) => catalog[c] == null);
       const isProd = envName(location.host) === 'PROD';
-      const plan = `${isProd ? '⚠ PROD UCC\n' : ''}Письмо «${tpl.name}»:\n` +
+      const plan = `${isProd ? '⚠ PROD UCC\n' : ''}${pageKind() === 'preset' ? 'Пресет' : 'Письмо'} «${tpl.name}»:\n` +
         `• создать локали (${creatable.length}): ${creatable.map((c) => c.toUpperCase()).join(', ') || '—'}\n` +
         `• залить код${job.locales.some((l) => l.subject) ? ' + тему' : ''} (${job.locales.length - unknown.length}): ${job.locales.filter((l) => !unknown.includes(l.code)).map((l) => l.code.toUpperCase()).join(', ')}\n` +
         (unknown.length ? `• нет в каталоге UCC (пропущу): ${unknown.map((c) => c.toUpperCase()).join(', ')}\n` : '') +
@@ -908,7 +925,7 @@
       // Студия сама рисует кнопку «Перенести в UCC» (нижняя панель «Кода») и зовёт этот мост.
       try {
         W.__retkitUccBridge = {
-          version: '0.14.0',
+          version: '0.15.0',
           openFromStudio: () => openTransfer(studioSource()),
           openMoFromStudio: () => {
             const src = studioSource();
@@ -1002,7 +1019,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.14.0',
+      version: '0.15.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -1081,7 +1098,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.14.0' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.15.0' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -1103,7 +1120,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.14.0' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.15.0' }).catch(() => {});
     loop();
   }
 
