@@ -289,4 +289,35 @@ assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not k
   assert.match(alerts.at(-1), /Сохранено: 3/);
 }
 
+// 9. Студия → MoEngage: окно показывает, что перенесётся и что сделать человеку; задание уходит во вкладку MoEngage
+{
+  store['retkit.mo.presence.motab1'] = { ts: Date.now(), tab: 'motab1', title: 'Fraud-2 (TEST)', campaign: 'abc123', locales: ['Default', 'EN_US', 'PT_PT'], editor: true };
+  const studio = tab('localhost:3000', '/constructor', {
+    RetKitStudioExport: {
+      info: () => ({ mode: 'constructor', name: 'fraud-2', locales: ['en', 'pt', 'es', 'ru'] }),
+      allLocales: async () => ({ name: 'fraud-2', locales: [
+        { code: 'en', subject: 'Termination', html: '<p>{{code}}</p>{{embedded.risk_warning}}' },
+        { code: 'pt', subject: 'Rescisão', html: '<p>PT</p>' },
+        { code: 'es', subject: 'Rescisión', html: '<p>ES</p>' },
+        { code: 'ru', subject: 'Расторжение', html: '<p>RU</p>' },
+      ] }),
+    },
+  });
+  for (const f of studio.timers) await f();
+  assert.equal(typeof studio.sandbox.__retkitUccBridge.openMoFromStudio, 'function', 'мост студии умеет MoEngage');
+  studio.sandbox.__retkitUccBridge.openMoFromStudio();
+  for (let i = 0; i < 6; i += 1) await tick();
+  const texts = studio.dom.nodes.filter((n) => !n.removed).map((n) => n.textContent || '');
+  assert.ok(texts.some((t) => /Перенесётся \(3\)/.test(t)), 'Default+EN_US+PT_PT перенесутся');
+  assert.ok(texts.some((t) => /Нет в этом письме MoEngage \(1\)/.test(t)) && texts.includes('es_ES'), 'ES: добавьте «+ Locale» в MoEngage');
+  assert.ok(texts.some((t) => /пока нет \(1\)/.test(t)) && texts.includes('RU'), 'RU: в MoEngage такой локали нет — попросить завести');
+  assert.ok(texts.some((t) => /не знает \(1\)/.test(t)), '{{code}} — плейсхолдер, который MoEngage не знает');
+  const go = studio.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Залить в MoEngage/.test(n.textContent || ''));
+  go.onclick();
+  const pushed = store['retkit.ucc.push'];
+  assert.equal(pushed.targetTab, 'motab1');
+  assert.ok(pushed.transfer.locales.some((l) => l.mo === 'pt_PT' && l.subject === 'Rescisão'), 'тема локали едет в MoEngage');
+  assert.ok(pushed.transfer.locales.find((l) => l.mo === 'en_US').html.includes("iq_risk_warning_noreg_EN"), 'футер — блоками MoEngage');
+}
+
 console.log('✓ ucc bridge: две вкладки через хранилище TM, присутствие, задание, перенос локалей + Subject + отправитель, ошибки по локали, только GET');

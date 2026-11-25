@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.13.3
+// @version      0.14.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -522,6 +522,102 @@
       if (input.value) check();
     }
 
+    // ─── Перенос в MoEngage (из письма UCC или из студии) ─────────────────────
+    // Открытое письмо MoEngage (вкладка с RetKit for MoEngage) получает задание через
+    // хранилище Tampermonkey (KEY.push) и само раскладывает HTML + тему по локалям,
+    // футер — блоками MoEngage (tools/ucc-footer-map.json). Создать письмо или локаль
+    // в MoEngage скрипт не может: окно заранее говорит, что сделать человеку.
+    const normMo = (x) => String(x || '').trim().toLowerCase().replace('-', '_');
+    function openMoTransfer(source) {
+      document.getElementById(MENU_ID)?.remove();
+      const box = el2('div', 'position:fixed;right:20px;bottom:64px;z-index:99999;width:440px;max-height:78vh;overflow:auto;background:#0f1722;color:#e6edf7;border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);font:12px/1.5 sans-serif;padding:14px 16px');
+      box.id = MENU_ID;
+      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:14px', `Перенос ${source.label} → MoEngage`);
+      const x = el2('button', 'background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer', '×'); x.onclick = () => box.remove(); head.append(x);
+      box.append(head);
+      const card = (label, text) => { const c = el2('div', 'margin-top:8px;padding:8px 10px;border-radius:9px;background:#152030;border:1px solid #334155'); c.append(el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', label), el2('div', 'font-weight:600', text)); return c; };
+      box.append(card(`Откуда · ${source.label}`, source.text));
+      box.append(el2('div', 'text-align:center;color:#64748b;font-size:16px;margin:2px 0', '↓'));
+      const to = el2('div', 'padding:8px 10px;border-radius:9px;background:#152030;border:1px dashed #475569');
+      to.append(el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', 'Куда · письмо MoEngage'));
+      const result = el2('div', 'margin-top:10px');
+      const tabsMo = moTabs();
+      if (!tabsMo.length) {
+        to.append(el2('div', 'margin-top:6px;color:#fbbf24', 'Нет открытого письма MoEngage.'));
+        to.append(el2('div', 'margin-top:4px;color:#cbd5e1;white-space:pre-line', '1. Создайте в MoEngage кампанию (Email) или откройте нужную.\n2. Дойдите до шага Content — откроется редактор с RetKit.\n3. Добавьте локали («+ Locale»), в которые переносим.\nПисьмо появится здесь само.'));
+      }
+      let chosen = null;
+      for (const t of tabsMo) {
+        const b = el2('button', 'display:block;width:100%;text-align:left;margin-top:6px;padding:7px 9px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e6edf7;cursor:pointer;font:inherit');
+        b.append(el2('b', '', moLabel(t)), el2('span', 'color:#8a98ad;margin-left:6px', t.locales?.length ? `${t.locales.length} лок.` : 'локали не видны'));
+        b.onclick = () => { chosen = t; for (const n of to.querySelectorAll?.('button') || []) n.style.borderColor = '#334155'; b.style.borderColor = '#60a5fa'; check(); };
+        to.append(b);
+      }
+      box.append(to, result);
+      document.body.appendChild(box);
+      if (tabsMo.length === 1) { chosen = tabsMo[0]; check(); }
+
+      let transfer = null;
+      async function check() {
+        result.textContent = '';
+        if (!chosen) return;
+        result.append(el2('div', 'color:#94a3b8', 'Готовлю перенос…'));
+        try {
+          const mail = await source.collect();
+          transfer = transferFor(mail);
+          result.textContent = '';
+          const have = new Set((chosen.locales || []).map(normMo));
+          const known = have.size > 0;
+          const write = transfer.locales.filter((l) => !known || have.has(normMo(l.mo)));
+          const absent = known ? transfer.locales.filter((l) => !have.has(normMo(l.mo))) : [];
+          const legend = (list, color, title) => {
+            if (!list.length) return;
+            const row = el2('div', 'margin-top:6px');
+            row.append(el2('div', 'color:#8a98ad', title));
+            const chips = el2('div', 'display:flex;flex-wrap:wrap;gap:4px;margin-top:3px');
+            for (const c of list) chips.append(el2('span', `padding:2px 7px;border-radius:6px;background:${color}`, c));
+            row.append(chips);
+            result.append(row);
+          };
+          legend(write.map((l) => l.mo), '#14532d', `Перенесётся (${write.length}): код + тема, футер — блоками MoEngage`);
+          legend(absent.map((l) => l.mo), '#7c2d12', `Нет в этом письме MoEngage (${absent.length}) — добавьте «+ Locale» в MoEngage, потом перенесите ещё раз`);
+          legend(transfer.skipped, '#334155', `Таких локалей в MoEngage пока нет (${transfer.skipped.length}) — пропущу; попросить завести`);
+          legend(transfer.empty, '#7c2d12', `Пустой HTML (${transfer.empty.length}) — пропущу`);
+          const ph = Object.keys(transfer.placeholders || {});
+          if (ph.length) legend(ph.slice(0, 8).concat(ph.length > 8 ? [`+${ph.length - 8}`] : []), '#713f12', `Плейсхолдеры, которых MoEngage не знает (${ph.length}) — останутся текстом, нужна замена`);
+          if (transfer.footerLeftovers?.length) legend(transfer.footerLeftovers, '#7c2d12', 'Футер UCC остался — карта футера не сработала');
+          if (!known) result.append(el2('div', 'margin-top:6px;color:#fbbf24', 'Список локалей письма MoEngage не виден — откройте шаг Content. Перенесу в те, что найдутся.'));
+          if (!write.length) { result.append(el2('div', 'margin-top:8px;color:#fecaca', 'Нечего переносить: в письме MoEngage нет ни одной нужной локали.')); return; }
+          const go = el2('button', 'display:block;width:100%;margin-top:12px;padding:10px;border-radius:9px;border:0;background:#2563eb;color:#fff;font:600 13px sans-serif;cursor:pointer', `Залить в MoEngage (${write.length} лок.) →`);
+          go.onclick = () => {
+            activeRequest = `push-${transfer.id}-${now().toString(36)}`;
+            gm.set(KEY.push, { requestId: activeRequest, ts: now(), targetTab: chosen.tab, auto: true, transfer });
+            go.disabled = true;
+            out.textContent = `Отправлено в «${moLabel(chosen)}» — переношу…`;
+          };
+          const out = el2('div', 'margin-top:8px;color:#cbd5e1;white-space:pre-wrap');
+          out.dataset.moOut = '1';
+          result.append(go, out);
+          result.append(el2('div', 'margin-top:6px;color:#64748b', 'Кампанию в MoEngage сохраняете вы (Save as draft). Ничего не публикуется.'));
+        } catch (error) {
+          result.textContent = '';
+          result.append(el2('div', 'color:#fecaca', `✕ ${error?.message || error}`));
+        }
+      }
+    }
+    gm.on(KEY.status, (st) => {
+      if (!st || st.requestId !== activeRequest) return;
+      const out = document.getElementById(MENU_ID)?.querySelector?.('[data-mo-out]');
+      if (!out) return;
+      if (st.state === 'running') out.textContent = `Переношу… ${st.done || 0}/${st.total || '?'}${st.last ? `\n${st.last}` : ''}`;
+      if (st.state === 'done') { out.textContent = st.failed ? `Перенесено ${st.ok}, ошибок ${st.failed} — подробности в окне RetKit (MoEngage)` : `✓ Перенесено ${st.ok} лок. Сохраните кампанию в MoEngage.`; out.style.color = st.failed ? '#fbbf24' : '#86efac'; }
+      if (st.state === 'error') { out.textContent = `✕ ${st.error || 'ошибка'}`; out.style.color = '#fecaca'; }
+    });
+    function uccMoSource() {
+      const mine = metaCache.get(templateId()) || {};
+      return { label: `UCC ${envName(location.host)}`, text: `${mine.name || `id ${templateId()}`} · ${mine.locales || '?'} лок.`, collect: () => collect(templateId()) };
+    }
+
     // ─── Помощник в целевом письме ────────────────────────────────────────────
     function localeTabs() {
       return [...(document.querySelectorAll?.('.ant-tabs-tab') || [])]
@@ -755,7 +851,7 @@
       section(menu, '→ MoEngage');
       const mo = moTabs();
       if (!mo.length) menu.append(el2('div', 'color:#8a98ad', 'Нет открытых писем MoEngage (откройте письмо на шаге контента).'));
-      for (const t of mo) menu.append(itemButton(moLabel(t), t.locales?.length ? `${t.locales.length} лок.: ${t.locales.join(', ')}` : '', () => send(t, menu)));
+      menu.append(itemButton('→ Перенести в MoEngage', mo.length ? `открыто: ${mo.map(moLabel).join(', ')}` : 'сначала откройте письмо в MoEngage', () => openMoTransfer(uccMoSource())));
       menu.append(out);
       document.body.appendChild(menu);
     }
@@ -810,7 +906,23 @@
         };
       }
       // Студия сама рисует кнопку «Перенести в UCC» (нижняя панель «Кода») и зовёт этот мост.
-      try { W.__retkitUccBridge = { version: '0.13.3', openFromStudio: () => openTransfer(studioSource()) }; } catch {}
+      try {
+        W.__retkitUccBridge = {
+          version: '0.14.0',
+          openFromStudio: () => openTransfer(studioSource()),
+          openMoFromStudio: () => {
+            const src = studioSource();
+            openMoTransfer({
+              label: 'студии',
+              text: src.fromText,
+              collect: async () => {
+                const m = await src.collect();
+                return { ...m, id: m.name || 'studio', host: location.host, microservice: '', sender: '', category: '' };
+              },
+            });
+          },
+        };
+      } catch {}
       function syncStudio() {
         let b = document.getElementById(PILL_ID);
         const api = studioApi();
@@ -890,7 +1002,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.13.3',
+      version: '0.14.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -969,7 +1081,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.13.3' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.14.0' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -991,7 +1103,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.13.3' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.14.0' }).catch(() => {});
     loop();
   }
 
