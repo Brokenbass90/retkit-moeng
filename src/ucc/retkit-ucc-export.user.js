@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.13.2
+// @version      0.13.3
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -375,7 +375,13 @@
         if (!p || p.tab === TAB || !p.id) continue;
         if (now() - (p.ts || 0) < ALIVE_MS) list.push(p);
       }
-      return list;
+      // Одно письмо в нескольких вкладках — один пункт (самый свежий сигнал).
+      const seen = new Map();
+      for (const p of list.sort((a, b) => (b.ts || 0) - (a.ts || 0))) {
+        const key = `${p.host}:${p.id}`;
+        if (!seen.has(key)) seen.set(key, p);
+      }
+      return [...seen.values()];
     }
 
     /** Чтение письма в другом UCC (другой сайт) — через Tampermonkey, с входом человека. Только GET. */
@@ -804,7 +810,7 @@
         };
       }
       // Студия сама рисует кнопку «Перенести в UCC» (нижняя панель «Кода») и зовёт этот мост.
-      try { W.__retkitUccBridge = { version: '0.13.2', openFromStudio: () => openTransfer(studioSource()) }; } catch {}
+      try { W.__retkitUccBridge = { version: '0.13.3', openFromStudio: () => openTransfer(studioSource()) }; } catch {}
       function syncStudio() {
         let b = document.getElementById(PILL_ID);
         const api = studioApi();
@@ -884,7 +890,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.13.2',
+      version: '0.13.3',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -963,7 +969,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.13.2' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.13.3' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -985,7 +991,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.13.2' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.13.3' }).catch(() => {});
     loop();
   }
 
