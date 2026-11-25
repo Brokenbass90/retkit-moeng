@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RetKit UCC Export
 // @namespace    https://github.com/Brokenbass90/retkit-moeng
-// @version      0.15.0
+// @version      0.16.0
 // @description  UCC: «⬇ ZIP письма» и мост в RetKit for MoEngage — открытое письмо (HTML + Subject всех локалей, отправитель) забирается кнопкой в MoEngage. В UCC только чтение.
 // @match        https://ucc.iqoption.com/*
 // @match        https://ucc.int.iqoption.com/*
@@ -98,7 +98,7 @@
 
   // ─── Данные письма ────────────────────────────────────────────────────────
   async function getJson(url) {
-    const res = await (W.fetch || fetch)(url, { credentials: 'include', headers: { Accept: 'application/json' } });
+    const res = await (W.fetch || fetch)(url, { cache: 'no-store', credentials: 'include', headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return res.json();
   }
@@ -400,20 +400,7 @@
 
     /** Чтение письма в другом UCC (другой сайт) — через Tampermonkey, с входом человека. Только GET. */
     function readOther(host, id, kind = 'email') {
-      if (host === location.host) return getJson(`${apiOf(kind)}/${id}`);
-      return new Promise((resolve, reject) => {
-        const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest);
-        if (!xhr) { reject(new Error('Tampermonkey не дал доступ к другому UCC')); return; }
-        xhr({
-          method: 'GET', url: `https://${host}${apiOf(kind)}/${id}`, headers: { Accept: 'application/json' },
-          onload: (r) => {
-            if (r.status === 401 || r.status === 403) { reject(new Error(`нет входа в UCC ${envName(host)} — откройте его и войдите`)); return; }
-            if (r.status < 200 || r.status >= 300) { reject(new Error(`UCC ${envName(host)}: HTTP ${r.status}`)); return; }
-            try { resolve(JSON.parse(r.responseText)); } catch { reject(new Error(`UCC ${envName(host)} ответил не JSON — возможно, нужен вход`)); }
-          },
-          onerror: () => reject(new Error(`UCC ${envName(host)} недоступен (VPN?)`)),
-        });
-      });
+      return uccApi(host).get(`${apiOf(kind)}/${id}`);
     }
     /** «…/email-templates/4097/edit», «…/presets/121/edit» или «4097» → { host, id, kind } */
     function parseTarget(text, fallbackHost, fallbackKind = 'email') {
@@ -444,98 +431,165 @@
     function openTransfer(source = uccSource()) {
       document.getElementById(MENU_ID)?.remove();
       let toHost = source.toHost;
-      const box = el2('div', 'position:fixed;right:20px;bottom:64px;z-index:99999;width:420px;max-height:75vh;overflow:auto;background:#0f1722;color:#e6edf7;border:1px solid #2a3647;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);font:12px/1.5 sans-serif;padding:14px 16px');
+      const srcKind = source.kind || 'email';
+      const C = { bg: '#0f1520', card: '#161e2c', line: '#263246', mute: '#8b97ab', text: '#e8eef8', blue: '#3b6cf6', green: '#16a34a' };
+      const box = el2('div', `position:fixed;right:20px;bottom:64px;z-index:99999;width:460px;max-height:80vh;display:flex;flex-direction:column;background:${C.bg};color:${C.text};border:1px solid ${C.line};border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.5);font:13px/1.45 system-ui,-apple-system,sans-serif;overflow:hidden`);
       box.id = MENU_ID;
-      const head = el2('div', 'display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:14px', source.title);
-      const x = el2('button', 'background:none;border:0;color:#8a98ad;font-size:16px;cursor:pointer', '×'); x.onclick = () => box.remove(); head.append(x);
-      box.append(head);
+      // Шапка
+      const head = el2('div', `display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid ${C.line}`);
+      const ht = el2('div', 'flex:1;min-width:0');
+      ht.append(el2('div', 'font-weight:700;font-size:15px', source.title));
+      ht.append(el2('div', `color:${C.mute};font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`, `${source.fromLabel.replace(/^Откуда · /, '')} · ${source.fromText}`));
+      const x = el2('button', `background:none;border:0;color:${C.mute};font-size:18px;line-height:1;cursor:pointer;padding:2px`, '×'); x.onclick = () => box.remove();
+      head.append(ht, x);
+      const body = el2('div', 'padding:12px 16px;overflow:auto;flex:1');
+      const foot = el2('div', `padding:12px 16px 14px;border-top:1px solid ${C.line};background:${C.card}`);
+      box.append(head, body, foot);
       const mine = { name: source.name, microservice: source.microservice };
-      const card = (label, text, color) => { const c = el2('div', `margin-top:8px;padding:8px 10px;border-radius:9px;background:#152030;border:1px solid ${color}`); c.append(el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', label), el2('div', 'font-weight:600', text)); return c; };
-      box.append(card(source.fromLabel, source.fromText, '#334155'));
-      box.append(el2('div', 'text-align:center;color:#64748b;font-size:16px;margin:2px 0', '↓'));
-      const toCard = el2('div', 'padding:8px 10px;border-radius:9px;background:#152030;border:1px dashed #475569');
-      const paints = [];
-      const toLabel = el2('div', 'color:#8a98ad;font-size:11px;text-transform:uppercase', `Куда · UCC ${envName(toHost)}`);
-      toCard.append(toLabel);
+
+      // Куда
+      body.append(el2('div', `color:${C.mute};font-size:11px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px`, 'Куда'));
+            const paints = [];
       if (source.anyEnv) {
-        const envRow = el2('div', 'display:flex;gap:6px;margin-top:6px');
+        const envRow = el2('div', `display:flex;gap:2px;padding:3px;border-radius:9px;background:${C.card};border:1px solid ${C.line};margin-bottom:8px`);
         for (const h of ['ucc.int.iqoption.com', 'ucc.iqoption.com']) {
-          const b = el2('button', 'flex:1;padding:5px;border-radius:7px;border:1px solid #334155;cursor:pointer;font:600 12px sans-serif', envName(h));
-          const paint = () => { b.style.background = toHost === h ? '#2563eb' : '#1e293b'; b.style.color = '#fff'; };
-          b.onclick = () => { toHost = h; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.placeholder = `ссылка на письмо или пресет ${envName(toHost)} (или номер письма)`; check(); };
+          const b = el2('button', 'flex:1;padding:6px;border-radius:7px;border:0;cursor:pointer;font:700 12px system-ui,sans-serif', envName(h));
+          const paint = () => { b.style.background = toHost === h ? (envName(h) === 'PROD' ? '#b45309' : C.blue) : 'transparent'; b.style.color = toHost === h ? '#fff' : C.mute; };
+          b.onclick = () => { toHost = h; for (const f of paints) f(); input.placeholder = placeholder(); renderOpen(); check(); };
           paints.push(paint); paint();
           envRow.append(b);
         }
-        toCard.append(envRow);
+        body.append(envRow);
       }
-      const open = uccTabs().filter((t) => source.anyEnv || t.host === toHost);
-      const srcKind = source.kind || 'email';
-      const same = open.find((t) => mine.name && t.name === mine.name && t.host === toHost && (t.kind || 'email') === srcKind && (t.microservice || '') === (mine.microservice || ''));
-      const input = el2('input', 'width:100%;box-sizing:border-box;margin-top:6px;padding:7px 9px;border-radius:7px;border:1px solid #334155;background:#0b1220;color:#e6edf7;font:inherit');
-      input.placeholder = `ссылка на письмо или пресет ${envName(toHost)} (или номер письма)`;
+      const placeholder = () => `ссылка на письмо или пресет ${envName(toHost)} (или номер письма)`;
+      const input = el2('input', `width:100%;box-sizing:border-box;padding:9px 11px;border-radius:9px;border:1px solid ${C.line};background:#0a0f18;color:${C.text};font:13px system-ui,sans-serif;outline:none`);
+      input.placeholder = placeholder();
+      input.onfocus = () => { input.style.borderColor = C.blue; };
+      input.onblur = () => { input.style.borderColor = C.line; };
+      body.append(input);
+      const openWrap = el2('div', 'margin-top:6px');
+      body.append(openWrap);
+      const allOpen = uccTabs();
+      const same = allOpen.find((t) => mine.name && t.name === mine.name && t.host === toHost && (t.kind || 'email') === srcKind && (t.microservice || '') === (mine.microservice || ''));
       if (same) input.value = uccUrl(same.host, same.kind, same.id);
-      toCard.append(input);
-      for (const t of open) {
-        const b = el2('button', 'display:inline-block;margin:6px 6px 0 0;padding:4px 8px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e6edf7;cursor:pointer;font:inherit', `открыто${source.anyEnv ? ` ${envName(t.host)}` : ''}: ${t.kind === 'preset' ? 'пресет ' : ''}${t.name || 'без имени'} #${t.id}`);
-        b.onclick = () => { toHost = t.host; toLabel.textContent = `Куда · UCC ${envName(toHost)}`; for (const f of paints) f(); input.value = uccUrl(t.host, t.kind, t.id); check(); };
-        toCard.append(b);
+      function renderOpen() {
+        openWrap.textContent = '';
+        const open = allOpen.filter((t) => source.anyEnv || t.host === toHost);
+        if (!open.length) return;
+        openWrap.append(el2('div', `color:${C.mute};font-size:11px;margin:2px 0 4px`, 'Открыто в браузере:'));
+        const row = el2('div', 'display:flex;flex-wrap:wrap;gap:6px');
+        for (const t of open) {
+          const b = el2('button', `display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:7px;border:1px solid ${C.line};background:${C.card};color:${C.text};cursor:pointer;font:12px system-ui,sans-serif`);
+          b.append(el2('span', `padding:0 5px;border-radius:4px;font-size:10px;font-weight:700;background:${envName(t.host) === 'PROD' ? '#78350f' : '#1e3a8a'}`, envName(t.host)));
+          if (t.kind === 'preset') b.append(el2('span', 'color:#c4b5fd;font-size:11px', 'пресет'));
+          b.append(el2('span', '', t.name || 'без имени'), el2('span', `color:${C.mute}`, `#${t.id}`));
+          b.onclick = () => { toHost = t.host; for (const f of paints) f(); input.value = uccUrl(t.host, t.kind, t.id); check(); };
+          row.append(b);
+        }
+        openWrap.append(row);
       }
-      box.append(toCard);
-      const result = el2('div', 'margin-top:10px');
-      box.append(result);
+      renderOpen();
+      const result = el2('div', 'margin-top:12px');
+      body.append(result);
+      // Подвал: главная кнопка + статус + запасной путь
+      const go = el2('button', `display:block;width:100%;padding:11px;border-radius:10px;border:0;background:#334155;color:#fff;font:700 14px system-ui,sans-serif;cursor:not-allowed`, 'Укажите письмо или пресет');
+      go.disabled = true;
+      const status = el2('div', 'margin-top:8px;white-space:pre-line;font-size:12px');
+      const alt = el2('button', `display:none;margin-top:8px;padding:0;border:0;background:none;color:${C.mute};font:12px system-ui,sans-serif;cursor:pointer;text-decoration:underline`, '');
+      foot.append(go, status, alt);
+      foot.append(el2('div', `margin-top:6px;color:#64748b;font-size:11px`, 'Создаёт недостающие локали и сохраняет код + Subject. «Set as Ready» не нажимает. Можно заливать повторно.'));
       document.body.appendChild(box);
 
       let timer = 0;
+      let target = null;
+      let busy = false;
       input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(check, 400); });
+      const chip = (c, bg, fg = '#fff') => el2('span', `padding:2px 7px;border-radius:6px;background:${bg};color:${fg};font:600 11px system-ui,sans-serif`, c.toUpperCase());
+      function group(title, list, bg, fg) {
+        if (!list.length) return;
+        const row = el2('div', 'margin-top:8px');
+        row.append(el2('div', `color:${C.mute};font-size:12px;margin-bottom:4px`, `${title} (${list.length})`));
+        const chips = el2('div', 'display:flex;flex-wrap:wrap;gap:4px');
+        for (const c of list) chips.append(chip(c, bg, fg));
+        row.append(chips);
+        result.append(row);
+      }
+      function setGo(state, text) {
+        go.textContent = text;
+        go.disabled = state !== 'ready';
+        go.style.cursor = state === 'ready' ? 'pointer' : 'not-allowed';
+        go.style.background = state === 'ready' ? (target && envName(target.host) === 'PROD' ? '#b45309' : C.green) : '#334155';
+      }
       async function check() {
-        result.textContent = '';
-        const target = parseTarget(input.value, toHost, srcKind);
-        if (!target) { if (input.value.trim()) result.append(el2('div', 'color:#fbbf24', 'Нужна ссылка вида …/email-templates/4097/edit, …/presets/121/edit или номер письма.')); return; }
-        result.append(el2('div', 'color:#94a3b8', 'Читаю оба письма…'));
+        if (busy) return;
+        result.textContent = ''; status.textContent = ''; alt.style.display = 'none';
+        target = parseTarget(input.value, toHost, srcKind);
+        if (!target) {
+          setGo('off', 'Укажите письмо или пресет');
+          if (input.value.trim()) result.append(el2('div', 'color:#fbbf24', 'Нужна ссылка вида …/email-templates/4097/edit, …/presets/121/edit или номер письма.'));
+          return;
+        }
+        setGo('off', 'Читаю…');
         try {
           const [src, dst] = await Promise.all([source.collect(), readOther(target.host, target.id, target.kind)]);
-          result.textContent = '';
-          const dstCodes = codesOf(dst);
+          const dstMap = new Map((dst.locales || []).map((l) => [String(l.locale?.short_name || l.locale?.name || '').toLowerCase(), l]));
           const srcCodes = src.locales.map((l) => l.code.toLowerCase());
-          const both = srcCodes.filter((c) => dstCodes.includes(c));
-          const noTarget = srcCodes.filter((c) => !dstCodes.includes(c));
-          const onlyTarget = dstCodes.filter((c) => !srcCodes.includes(c));
+          const create = srcCodes.filter((c) => !dstMap.has(c));
+          const changed = src.locales.filter((l) => dstMap.has(l.code) && (!sameHtml(dstMap.get(l.code).html_body, l.html) || (l.subject && l.subject !== dstMap.get(l.code).subject))).map((l) => l.code);
+          const same = srcCodes.filter((c) => dstMap.has(c) && !changed.includes(c));
+          const onlyTarget = [...dstMap.keys()].filter((c) => c && !srcCodes.includes(c));
           const sameName = !src.name || dst.name === src.name;
-          result.append(el2('div', `font-weight:600;color:${sameName ? '#86efac' : '#fbbf24'}`, `${sameName ? '✓' : '⚠'} ${envName(target.host)} · ${wordOf(target.kind)}: «${dst.name}» (${dst.microservice_name || '—'})${sameName ? '' : ' — имя не совпадает'}`));
-          const legend = (list, color, title) => {
-            if (!list.length) return;
-            const row = el2('div', 'margin-top:6px');
-            row.append(el2('div', 'color:#8a98ad', title));
-            const chips = el2('div', 'display:flex;flex-wrap:wrap;gap:4px;margin-top:3px');
-            for (const c of list) chips.append(el2('span', `padding:2px 7px;border-radius:6px;background:${color}`, c.toUpperCase()));
-            row.append(chips);
-            result.append(row);
-          };
-          const hasSubjects = src.locales.some((l) => l.subject);
-          legend(both, '#14532d', `Перенесётся (${both.length}): ${hasSubjects ? 'код + Subject' : 'код (тема остаётся как в UCC)'}`);
-          legend(noTarget, '#7c2d12', `Нет в ${envName(target.host)} (${noTarget.length}): добавьте локаль «+» в целевом письме — потом перенесётся`);
-          legend(onlyTarget, '#334155', `Есть только в ${envName(target.host)} (${onlyTarget.length}): не трогаем`);
-          const go = el2('button', 'display:block;width:100%;margin-top:12px;padding:10px;border-radius:9px;border:0;background:#2563eb;color:#fff;font:600 13px sans-serif;cursor:pointer', `Открыть ${wordOf(target.kind)} ${envName(target.host)} и перенести →`);
-          go.onclick = () => {
-            saveJob({
-              ts: now(),
-              from: source.from(src),
-              to: { host: target.host, id: String(target.id), kind: target.kind, name: dst.name },
-              locales: src.locales.map((l) => ({ code: l.code.toLowerCase(), subject: l.subject, html: l.html })),
-              done: {},
-            });
-            const tabOpen = open.find((t) => String(t.id) === String(target.id) && t.host === target.host && (t.kind || 'email') === target.kind);
-            if (tabOpen) { result.append(el2('div', 'margin-top:8px;color:#86efac', `Задание отправлено во вкладку ${envName(target.host)} — перейдите туда.`)); return; }
+          const card = el2('div', `display:flex;gap:8px;align-items:center;padding:9px 11px;border-radius:10px;background:${C.card};border:1px solid ${sameName ? C.line : '#b45309'}`);
+          card.append(el2('span', `padding:1px 6px;border-radius:5px;font:700 10px system-ui,sans-serif;background:${envName(target.host) === 'PROD' ? '#78350f' : '#1e3a8a'}`, envName(target.host)));
+          card.append(el2('span', `color:${target.kind === 'preset' ? '#c4b5fd' : C.mute};font-size:12px`, wordOf(target.kind)));
+          card.append(el2('b', 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', `«${dst.name}»`));
+          card.append(el2('span', `color:${C.mute};font-size:12px`, `#${target.id}`));
+          result.append(card);
+          if (!sameName) result.append(el2('div', 'margin-top:4px;color:#fbbf24;font-size:12px', `⚠ Имя не совпадает с «${src.name}» — проверьте, что это то письмо.`));
+          group('Перезапишется', changed, '#166534');
+          group(`Создастся в ${envName(target.host)}`, create, '#1d4ed8');
+          group('Без изменений', same, '#273449', '#94a3b8');
+          group(`Есть только в ${envName(target.host)} — не трогаем`, onlyTarget, 'transparent', '#64748b');
+          if (!src.locales.some((l) => l.subject)) result.append(el2('div', `margin-top:8px;color:${C.mute};font-size:12px`, 'Subject в источнике нет — в UCC останется прежний.'));
+          const n = changed.length + create.length;
+          setGo('ready', n ? `⚡ Залить в ${wordOf(target.kind)} ${envName(target.host)} · ${n} лок.` : `↻ Залить ещё раз (изменений нет)`);
+          alt.style.display = 'inline';
+          alt.textContent = `или открыть ${wordOf(target.kind)} ${envName(target.host)} и вставлять по локали →`;
+          alt.onclick = () => {
+            saveJob({ ts: now(), from: source.from(src), to: { host: target.host, id: String(target.id), kind: target.kind, name: dst.name },
+              locales: src.locales.map((l) => ({ code: l.code.toLowerCase(), subject: l.subject, html: l.html })), done: {} });
+            const tabOpen = allOpen.find((t) => String(t.id) === String(target.id) && t.host === target.host && (t.kind || 'email') === target.kind);
+            if (tabOpen) { status.style.color = '#86efac'; status.textContent = `Помощник появился во вкладке ${wordOf(target.kind)} ${envName(target.host)} — перейдите туда.`; return; }
             W.open(uccUrl(target.host, target.kind, target.id), '_blank');
             box.remove();
           };
-          result.append(go);
-          result.append(el2('div', 'margin-top:6px;color:#64748b', 'В UCC ничего не сохраняется само: в целевом письме помощник вставит код локали, Save нажимаете вы.'));
         } catch (error) {
-          result.textContent = '';
+          setGo('off', 'Не получилось прочитать');
           result.append(el2('div', 'color:#fecaca', `✕ ${error?.message || error}`));
         }
       }
+      go.onclick = async () => {
+        if (go.disabled || !target || busy) return;
+        busy = true; setGo('off', 'Собираю локали…'); status.style.color = C.mute; status.textContent = '';
+        try {
+          // Каждый раз — свежие локали источника: поправили в студии → заливаем исправленное.
+          const src = await source.collect();
+          const locs = src.locales.map((l) => ({ code: l.code.toLowerCase(), subject: l.subject || '', html: l.html }));
+          const r = await pushToUcc(target, locs, { report: (t) => setGo('off', t), fromName: src.name });
+          busy = false;
+          if (!r) { check(); return; }
+          const link = el2('a', 'display:inline-block;margin-top:4px;color:#93c5fd;font-weight:600', `↗ Открыть ${wordOf(target.kind)} в UCC ${envName(target.host)}`);
+          link.href = uccUrl(target.host, target.kind, target.id); link.target = '_blank';
+          await check(); // показать актуальное состояние цели (обычно «Без изменений»)
+          status.style.color = r.failed.length ? '#fbbf24' : '#86efac';
+          status.textContent = pushSummary(r);
+          status.append(document.createTextNode('\n'), link);
+        } catch (error) {
+          busy = false;
+          status.style.color = '#fecaca'; status.textContent = `✕ ${error?.message || error}`;
+          setGo('ready', '↻ Повторить');
+        }
+      };
       if (input.value) check();
     }
 
@@ -681,23 +735,47 @@
       return { code, subject: Boolean(subj) };
     }
 
-    // ─── Перенос всего разом (API UCC, тот же, что у кнопок «+» и Save) ─────────
-    // Из кода UCC (chunk 1384): addLocales = POST /api/email/templates/<id>/locales [{locale_id}],
-    // сохранение локали = PUT /api/email/templates/<id>/locales/<запись локали> {subject, html_body}.
-    // «Set as Ready» (register) НЕ делаем — это решение человека.
-    async function sendJson(method, url, body) {
-      const res = await fetch(url, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-      if (res.status === 403) throw new Error('UCC: нет прав (403)');
-      if (res.status === 204) return {};
-      let data = {};
-      try { data = await res.json(); } catch {}
-      if (!res.ok || data?.error || data?.errors) throw new Error(`UCC ${method} ${url.replace(/^.*\/api\//, '/api/')}: ${res.status} ${JSON.stringify(data?.error || data?.errors || '').slice(0, 200)}`);
-      return data;
+    // ─── Заливка в письмо/пресет UCC (API UCC — тот же, что у кнопок «+» и Save) ─
+    // Из кода UCC (chunk 1384), письма и пресеты одинаково:
+    //   addLocales  = POST <api>/<id>/locales [{locale_id}]
+    //   save locale = PUT  <api>/<id>/locales/<запись локали> {subject, html_body}
+    // <api> = /api/email/templates или /api/email/presets. «Set as Ready» НЕ делаем — это решение человека.
+    // Свой UCC — обычный fetch; другой (студия → UCC, INT → PROD) — GM_xmlhttpRequest со входом человека.
+    // Всё без кеша: иначе повторная заливка «видит» старый ответ и считает, что не сохранилось.
+    function uccApi(host) {
+      const local = host === location.host;
+      const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest);
+      async function call(method, path, body) {
+        const url = local ? path : `https://${host}${path}`;
+        const short = `${method} ${path.replace(/^\/api\//, '/api/')}`;
+        let status; let text;
+        if (local) {
+          const res = await (W.fetch || fetch)(url, { method, cache: 'no-store', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+          status = res.status;
+          text = res.text ? await res.text() : JSON.stringify(await res.json().catch(() => ({})));
+        } else {
+          if (!xhr) throw new Error('Tampermonkey не дал доступ к UCC (нет GM_xmlhttpRequest)');
+          ({ status, text } = await new Promise((resolve, reject) => xhr({
+            method, url, data: body === undefined ? undefined : JSON.stringify(body), nocache: true,
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Cache-Control': 'no-cache' },
+            onload: (r) => resolve({ status: r.status, text: r.responseText }),
+            onerror: () => reject(new Error(`UCC ${envName(host)} недоступен (VPN?)`)),
+          })));
+        }
+        if (status === 401) throw new Error(`нет входа в UCC ${envName(host)} — откройте его во вкладке и войдите`);
+        if (status === 403) throw new Error(`UCC ${envName(host)}: нет прав (403)`);
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch { if (method === 'GET') throw new Error(`UCC ${envName(host)} ответил не JSON — возможно, нужен вход`); }
+        if (status < 200 || status >= 300 || data?.error || data?.errors) throw new Error(`UCC ${short}: ${status} ${JSON.stringify(data?.error || data?.errors || '').slice(0, 200)}`);
+        return data;
+      }
+      return { get: (p) => call('GET', p), send: call };
     }
-    /** Каталог локалей UCC: короткий код → locale_id. Берём из /api/init, иначе из списка писем. */
-    let localeCatalog = null;
-    async function getLocaleCatalog() {
-      if (localeCatalog) return localeCatalog;
+    /** Каталог локалей UCC (на каждом стенде свой): короткий код → locale_id. Из /api/init, иначе из списка писем. */
+    const localeCatalogs = {};
+    async function getLocaleCatalog(host = location.host) {
+      if (localeCatalogs[host]) return localeCatalogs[host];
+      const api = uccApi(host);
       const map = {};
       const take = (arr) => { for (const x of arr || []) { const code = String(x?.short_name || x?.locale?.short_name || '').toLowerCase(); const id = x?.locale_id ?? (x?.short_name ? x?.id : undefined); if (code && id != null && map[code] == null) map[code] = id; } };
       const walk = (v, depth = 0) => {
@@ -705,61 +783,89 @@
         if (Array.isArray(v)) { if (v.some((x) => x && (x.short_name || x.locale?.short_name))) take(v); else v.forEach((x) => walk(x, depth + 1)); return; }
         if (typeof v === 'object') for (const x of Object.values(v)) walk(x, depth + 1);
       };
-      try { walk(await getJson('/api/init')); } catch {}
+      try { walk(await api.get('/api/init')); } catch {}
       if (Object.keys(map).length < 10) {
         try {
-          const list = await getJson('/api/email/templates?with=locales&page=1&perpage=100');
+          const list = await api.get('/api/email/templates?with=locales&page=1&perpage=100');
           for (const t of asList(list).concat(list?.templates || [])) take(t.locales);
         } catch {}
       }
-      localeCatalog = map;
+      localeCatalogs[host] = map;
       return map;
     }
-    async function autoTransferAll(job, report) {
-      const id = templateId();
-      const base = `${apiOf(pageKind())}/${id}`;
-      let tpl = await getJson(base);
-      const have = new Map((tpl.locales || []).map((l) => [String(l.locale?.short_name || '').toLowerCase(), l]));
-      const missing = job.locales.map((l) => l.code).filter((c) => !have.has(c));
-      const catalog = missing.length ? await getLocaleCatalog() : {};
+    const sameHtml = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim();
+    /**
+     * Залить локали в письмо/пресет UCC: создать недостающие, в каждую — код + Subject.
+     * target = { host, kind, id }; locales = [{ code, subject, html }]. Можно повторять сколько угодно —
+     * каждый раз перезаписывает. ask(plan) → true/false (подтверждение человека).
+     */
+    async function pushToUcc(target, locales, { report = () => {}, ask = (m) => W.confirm?.(m), fromName = '' } = {}) {
+      const api = uccApi(target.host);
+      const base = `${apiOf(target.kind)}/${target.id}`;
+      let tpl = await api.get(base);
+      const codeOf = (l) => String(l.locale?.short_name || '').toLowerCase();
+      const have = new Map((tpl.locales || []).map((l) => [codeOf(l), l]));
+      const missing = locales.map((l) => l.code).filter((c) => !have.has(c));
+      const catalog = missing.length ? await getLocaleCatalog(target.host) : {};
       const creatable = missing.filter((c) => catalog[c] != null);
       const unknown = missing.filter((c) => catalog[c] == null);
-      const isProd = envName(location.host) === 'PROD';
-      const plan = `${isProd ? '⚠ PROD UCC\n' : ''}${pageKind() === 'preset' ? 'Пресет' : 'Письмо'} «${tpl.name}»:\n` +
-        `• создать локали (${creatable.length}): ${creatable.map((c) => c.toUpperCase()).join(', ') || '—'}\n` +
-        `• залить код${job.locales.some((l) => l.subject) ? ' + тему' : ''} (${job.locales.length - unknown.length}): ${job.locales.filter((l) => !unknown.includes(l.code)).map((l) => l.code.toUpperCase()).join(', ')}\n` +
-        (unknown.length ? `• нет в каталоге UCC (пропущу): ${unknown.map((c) => c.toUpperCase()).join(', ')}\n` : '') +
-        `«Set as Ready» не нажимаю. Продолжить?`;
-      if (!W.confirm?.(plan)) return null;
+      const changed = locales.filter((l) => have.has(l.code) && (!sameHtml(have.get(l.code).html_body, l.html) || (l.subject && l.subject !== have.get(l.code).subject))).map((l) => l.code);
+      const same = locales.filter((l) => have.has(l.code) && !changed.includes(l.code)).map((l) => l.code);
+      const up = (list) => list.map((c) => c.toUpperCase()).join(', ') || '—';
+      const isProd = envName(target.host) === 'PROD';
+      const plan = `${isProd ? '⚠ PROD UCC\n' : ''}${target.kind === 'preset' ? 'Пресет' : 'Письмо'} ${envName(target.host)} «${tpl.name}»${fromName && fromName !== tpl.name ? `\n⚠ имя не совпадает с «${fromName}»` : ''}\n\n` +
+        `• создать локали (${creatable.length}): ${up(creatable)}\n` +
+        `• перезаписать изменённые (${changed.length}): ${up(changed)}\n` +
+        (same.length ? `• без изменений (${same.length}): ${up(same)}\n` : '') +
+        (unknown.length ? `• нет в каталоге UCC — пропущу (${unknown.length}): ${up(unknown)}\n` : '') +
+        `\n«Set as Ready» не нажимаю. Залить?`;
+      if (!ask(plan)) return null;
       if (creatable.length) {
-        report(`Создаю локали: ${creatable.map((c) => c.toUpperCase()).join(', ')}…`);
-        await sendJson('POST', `${base}/locales`, creatable.map((c) => ({ locale_id: catalog[c] })));
-        tpl = await getJson(base);
+        report(`Создаю локали: ${up(creatable)}…`);
+        await api.send('POST', `${base}/locales`, creatable.map((c) => ({ locale_id: catalog[c] })));
+        tpl = await api.get(base);
       }
-      const records = new Map((tpl.locales || []).map((l) => [String(l.locale?.short_name || '').toLowerCase(), l]));
-      const res = { ok: [], failed: [], skipped: unknown.slice() };
-      for (const l of job.locales) {
+      const records = new Map((tpl.locales || []).map((l) => [codeOf(l), l]));
+      const res = { ok: [], failed: [], skipped: unknown.slice(), warn: [], name: tpl.name };
+      let n = 0;
+      for (const l of locales) {
         const rec = records.get(l.code);
         if (!rec) { if (!res.skipped.includes(l.code)) res.skipped.push(l.code); continue; }
-        report(`Заливаю ${l.code.toUpperCase()}… (${res.ok.length + res.failed.length + 1}/${job.locales.length})`);
+        n += 1;
+        report(`Заливаю ${l.code.toUpperCase()}… ${n}/${locales.length - res.skipped.length}`);
         try {
-          await sendJson('PUT', `${base}/locales/${rec.id}`, { subject: l.subject || rec.subject || '', html_body: l.html });
+          await api.send('PUT', `${base}/locales/${rec.id}`, { subject: l.subject || rec.subject || '', html_body: l.html });
           res.ok.push(l.code);
-          job.done = { ...(job.done || {}), [l.code]: true };
         } catch (error) { res.failed.push(`${l.code.toUpperCase()}: ${error.message}`); }
       }
-      // Проверка: перечитать и сравнить
+      // Проверка: перечитать (без кеша). Пробелы UCC может переформатировать — это не ошибка.
       try {
-        const after = await getJson(base);
-        for (const l of after.locales || []) {
-          const c = String(l.locale?.short_name || '').toLowerCase();
-          const src = job.locales.find((x) => x.code === c);
-          if (src && res.ok.includes(c) && (l.html_body || '') !== src.html) { res.ok = res.ok.filter((x) => x !== c); res.failed.push(`${c.toUpperCase()}: UCC сохранил не тот HTML`); }
+        const after = await api.get(base);
+        for (const rec of after.locales || []) {
+          const src = locales.find((x) => x.code === codeOf(rec));
+          if (src && res.ok.includes(src.code) && !sameHtml(rec.html_body, src.html)) res.warn.push(src.code.toUpperCase());
         }
       } catch {}
-      saveJob(job);
+      // Открытые вкладки этого письма узнают, что код обновился (покажут «обновите страницу»).
+      gm.set('retkit.ucc.updated', { ts: now(), host: target.host, kind: target.kind, id: String(target.id), from: fromName });
       return res;
     }
+    function pushSummary(r) {
+      return `✓ Сохранено: ${r.ok.length}${r.failed.length ? `\n✕ Ошибки: ${r.failed.join('; ')}` : ''}${r.skipped.length ? `\nПропущено (нет в каталоге UCC): ${r.skipped.map((c) => c.toUpperCase()).join(', ')}` : ''}${r.warn.length ? `\n⚠ После сохранения код отличается: ${r.warn.join(', ')} — проверьте в UCC` : ''}`;
+    }
+    // Вкладка этого письма/пресета: код поменяли из другого места → плашка «обновите страницу».
+    gm.on('retkit.ucc.updated', (u, remote) => {
+      if (!remote || !u || u.host !== location.host || String(u.id) !== String(templateId()) || (u.kind || 'email') !== pageKind()) return;
+      document.getElementById('retkit-ucc-updated')?.remove();
+      const bar = el2('div', 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:100000;display:flex;gap:12px;align-items:center;padding:10px 14px;border-radius:10px;background:#14532d;color:#ecfdf5;font:600 13px/1.3 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)');
+      bar.id = 'retkit-ucc-updated';
+      bar.append(el2('span', '', `Код обновлён${u.from ? ` из «${u.from}»` : ''}. Несохранённые правки на странице будут потеряны.`));
+      const b = el2('button', 'padding:6px 12px;border-radius:7px;border:0;background:#fff;color:#14532d;font:700 12px system-ui,sans-serif;cursor:pointer', 'Обновить страницу');
+      b.onclick = () => { try { W.location.reload(); } catch {} };
+      const x = el2('button', 'background:none;border:0;color:#bbf7d0;cursor:pointer;font-size:15px', '×'); x.onclick = () => bar.remove();
+      bar.append(b, x);
+      document.body.appendChild(bar);
+    });
 
     let guideNote = '';
     let guideSig = '';
@@ -822,10 +928,9 @@
       allBtn.onclick = async () => {
         allBtn.disabled = true;
         try {
-          const r = await autoTransferAll(job, (t) => { allBtn.textContent = t; });
+          const r = await pushToUcc({ host: location.host, kind: pageKind(), id: templateId() }, job.locales, { report: (t) => { allBtn.textContent = t; }, fromName: job.from.name });
           if (!r) { allBtn.disabled = false; renderGuide(); return; }
-          const msg = `✓ Сохранено: ${r.ok.length}${r.failed.length ? `\n✕ Ошибки: ${r.failed.join('; ')}` : ''}${r.skipped.length ? `\nПропущено (нет в каталоге UCC): ${r.skipped.map((c) => c.toUpperCase()).join(', ')}` : ''}\n\nСтраница обновится, чтобы показать локали.`;
-          W.alert?.(msg);
+          W.alert?.(`${pushSummary(r)}\n\nСтраница обновится, чтобы показать локали.`);
           if (!r.failed.length) dropJob(job);
           try { W.location.reload(); } catch {}
         } catch (error) { guideNote = `✕ ${error.message}`; allBtn.disabled = false; guideSig = ''; renderGuide(); }
@@ -925,7 +1030,7 @@
       // Студия сама рисует кнопку «Перенести в UCC» (нижняя панель «Кода») и зовёт этот мост.
       try {
         W.__retkitUccBridge = {
-          version: '0.15.0',
+          version: '0.16.0',
           openFromStudio: () => openTransfer(studioSource()),
           openMoFromStudio: () => {
             const src = studioSource();
@@ -1019,7 +1124,7 @@
     try { document.addEventListener('visibilitychange', moBeat); } catch {}
     try { W.addEventListener('pagehide', () => gm.del(MO_PREFIX + TAB)); } catch {}
     W.__RetKitUccLink = {
-      version: '0.15.0',
+      version: '0.16.0',
       /** Письма, открытые сейчас во вкладках UCC: [{ id, name, microservice, locales, host }]. */
       tabs,
       /** Совместимость: первое открытое письмо. */
@@ -1098,7 +1203,7 @@
           for (const m of data.messages || []) {
             after = Math.max(after, m.id); saveAfter(after);
             if (m.from !== 'claude') continue;
-            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.15.0' }).catch(() => {}); continue; }
+            if (m.type === 'status') { await mbPost('claude', { type: 'status', cmd: m.id, url: location.href, templateId: templateId(), version: '0.16.0' }).catch(() => {}); continue; }
             await handle(m);
           }
         } catch {
@@ -1120,7 +1225,7 @@
         setTimeout(wait, 1000);
       }
     } catch {}
-    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.15.0' }).catch(() => {});
+    mbPost('claude', { type: 'ready', url: location.href, templateId: templateId(), version: '0.16.0' }).catch(() => {});
     loop();
   }
 

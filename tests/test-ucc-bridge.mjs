@@ -210,9 +210,10 @@ assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not k
   for (let i = 0; i < 6; i += 1) await tick();
   assert.equal(xhrCalls[0].method, 'GET');
   const texts = ucc.dom.nodes.filter((n) => !n.removed).map((n) => n.textContent || '');
-  assert.ok(texts.some((t) => /Перенесётся \(3\)/.test(t)), 'перенесётся 3 локали');
-  assert.ok(texts.some((t) => /Нет в PROD \(1\)/.test(t)), 'RU нет в PROD — подсказка добавить «+»');
-  const go = ucc.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Открыть письмо PROD и перенести/.test(n.textContent || ''));
+  assert.ok(texts.some((t) => /Без изменений \(3\)/.test(t)), 'EN/PT/FR в PROD такие же');
+  assert.ok(texts.some((t) => /Создастся в PROD \(1\)/.test(t)), 'RU в PROD создастся');
+  assert.ok(texts.some((t) => /Залить в письмо PROD/.test(t)), 'главная кнопка — залить сразу');
+  const go = ucc.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /открыть письмо PROD и вставлять по локали/.test(n.textContent || ''));
   go.onclick();
   assert.equal(opened.length, 0, 'PROD уже открыт — новую вкладку не открываем');
   await tick(); await tick();
@@ -320,60 +321,76 @@ assert.ok(partial.lines.some((l) => l.includes('pt_PT') && l.includes('did not k
   assert.ok(pushed.transfer.locales.find((l) => l.mo === 'en_US').html.includes("iq_risk_warning_noreg_EN"), 'футер — блоками MoEngage');
 }
 
-// 10. Пресеты UCC (/presets/<id>): студия → пресет INT по ссылке, задание, «⚡ Перенести всё» через /api/email/presets
+// 10. Пресеты UCC: студия → пресет INT одной кнопкой (GM_xmlhttpRequest → /api/email/presets), повторная заливка
 {
   const db = { id: 121, name: 'fraud', locales: [{ id: 901, locale_id: 2, locale: { short_name: 'en' }, subject: '', html_body: '<p>old</p>' }] };
+  const reqs = [];
+  const handle = (method, url, body) => {
+    reqs.push({ method, url });
+    if (url === '/api/init') return [200, { locales: [{ id: 2, short_name: 'en' }, { id: 7, short_name: 'pt' }] }];
+    if (url === '/api/email/presets/121' && method === 'GET') return [200, db];
+    if (url === '/api/email/presets/121/locales' && method === 'POST') { for (const x of body) db.locales.push({ id: 950 + x.locale_id, locale_id: x.locale_id, locale: { short_name: 'pt' }, subject: '', html_body: '' }); return [200, {}]; }
+    const m = url.match(/^\/api\/email\/presets\/121\/locales\/(\d+)$/);
+    if (m && method === 'PUT') { Object.assign(db.locales.find((l) => String(l.id) === m[1]), body); return [204, null]; }
+    return [404, { error: 'nf' }];
+  };
+  let studioLocales = [{ code: 'en', subject: 'Hold', html: '<p>EN</p>' }, { code: 'pt', subject: 'Retido', html: '<p>PT</p>' }];
+  const confirms = [];
   const studio = tab('localhost:3000', '/workbench', {
-    RetKitStudioExport: {
-      info: () => ({ mode: 'code', name: 'fraud', locales: ['en', 'pt'] }),
-      allLocales: async () => ({ name: 'fraud', locales: [{ code: 'en', subject: 'Hold', html: '<p>EN</p>' }, { code: 'pt', subject: 'Retido', html: '<p>PT</p>' }] }),
-    },
+    confirm: (m) => { confirms.push(m); return true; },
+    RetKitStudioExport: { info: () => ({ mode: 'code', name: 'fraud', locales: ['en', 'pt'] }), allLocales: async () => ({ name: 'fraud', locales: JSON.parse(JSON.stringify(studioLocales)) }) },
   });
-  const xhr = [];
-  studio.sandbox.GM_xmlhttpRequest = (o) => { xhr.push(o); setTimeout(() => o.onload({ status: 200, responseText: JSON.stringify(db) }), 0); };
-  const opened = [];
-  studio.sandbox.open = (u) => opened.push(u);
+  studio.sandbox.GM_xmlhttpRequest = (o) => {
+    const path = o.url.replace(/^https:\/\/ucc\.int\.iqoption\.com/, '');
+    assert.ok(o.url.startsWith('https://ucc.int.iqoption.com/'), 'пишем только в INT');
+    const [status, data] = handle(o.method, path, o.data ? JSON.parse(o.data) : undefined);
+    setTimeout(() => o.onload({ status, responseText: data == null ? '' : JSON.stringify(data) }), 0);
+  };
   for (const f of studio.timers) await f();
   studio.sandbox.__retkitUccBridge.openFromStudio();
   const input = studio.dom.nodes.find((n) => n.tag === 'input' && !n.removed);
   input.value = 'https://ucc.int.iqoption.com/presets/121/edit';
-  const intBtn = studio.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && n.textContent === 'INT');
-  intBtn.onclick();
+  studio.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && n.textContent === 'INT').onclick();
   for (let i = 0; i < 6; i += 1) await tick();
-  assert.equal(xhr[0]?.url, 'https://ucc.int.iqoption.com/api/email/presets/121', 'пресет читается через /api/email/presets');
-  const texts = studio.dom.nodes.filter((n) => !n.removed).map((n) => n.textContent || '');
-  assert.ok(texts.some((t) => /пресет: «fraud»/.test(t)), 'окно понимает, что цель — пресет');
-  const go = studio.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Открыть пресет INT и перенести/.test(n.textContent || ''));
-  assert.ok(go, 'кнопка «Открыть пресет INT и перенести»');
-  go.onclick();
-  assert.equal(opened[0], 'https://ucc.int.iqoption.com/presets/121/edit');
-  const job = store['retkit.ucc.u2u.jobs']['ucc.int.iqoption.com:preset:121'];
-  assert.ok(job && job.to.kind === 'preset', 'задание лежит под ключом пресета');
+  assert.equal(reqs[0].url, '/api/email/presets/121', 'пресет читается через /api/email/presets');
+  let texts = studio.dom.nodes.filter((n) => !n.removed).map((n) => n.textContent || '');
+  assert.ok(texts.includes('пресет') && texts.includes('«fraud»'), 'окно понимает, что цель — пресет');
+  assert.ok(texts.some((t) => /Перезапишется \(1\)/.test(t)) && texts.some((t) => /Создастся в INT \(1\)/.test(t)));
+  const go = () => studio.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Залить/.test(n.textContent || ''));
+  assert.match(go().textContent, /Залить в пресет INT · 2 лок/);
+  await go().onclick();
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'pt').html_body, '<p>PT</p>');
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'en').subject, 'Hold');
+  assert.ok(!reqs.some((r) => /templates/.test(r.url) && r.method !== 'GET'), 'в письма не пишет — только в пресет');
+  assert.ok(!reqs.some((r) => /status|register/.test(r.url)), 'Set as Ready не нажимает');
+  texts = studio.dom.nodes.filter((n) => !n.removed).map((n) => n.textContent || '');
+  assert.ok(texts.some((t) => /Сохранено: 2/.test(t)), 'итог в окне');
+  assert.ok(texts.some((t) => /Без изменений \(2\)/.test(t)), 'после заливки окно показывает свежее состояние');
+  // Нашли ошибку → поправили в студии → залили снова: перезаписывается только изменённое
+  studioLocales[1].html = '<p>PT fixed</p>';
+  input.value = 'https://ucc.int.iqoption.com/presets/121/edit';
+  const putsBefore = reqs.filter((r) => r.method === 'PUT').length;
+  await go().onclick();
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'pt').html_body, '<p>PT fixed</p>', 'повторная заливка работает');
+  assert.ok(reqs.filter((r) => r.method === 'PUT').length > putsBefore);
+  assert.match(confirms.at(-1), /перезаписать изменённые \(1\): PT/);
+  assert.ok(store['retkit.ucc.updated']?.id === '121', 'открытые вкладки пресета узнают об обновлении');
 
-  const reqs = [];
-  const f = async (url, opts = {}) => {
-    const method = opts.method || 'GET';
-    reqs.push({ method, url });
-    if (url === '/api/init') return { ok: true, status: 200, json: async () => ({ locales: [{ id: 2, short_name: 'en' }, { id: 7, short_name: 'pt' }] }) };
-    if (url === '/api/email/presets/121' && method === 'GET') return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(db)) };
-    if (url === '/api/email/presets/121/locales' && method === 'POST') { for (const x of JSON.parse(opts.body)) db.locales.push({ id: 950 + x.locale_id, locale_id: x.locale_id, locale: { short_name: 'pt' }, subject: '', html_body: '' }); return { ok: true, status: 200, json: async () => ({}) }; }
-    const m = url.match(/^\/api\/email\/presets\/121\/locales\/(\d+)$/);
-    if (m && method === 'PUT') { Object.assign(db.locales.find((l) => String(l.id) === m[1]), JSON.parse(opts.body)); return { ok: true, status: 204, json: async () => ({}) }; }
-    return { ok: false, status: 404, json: async () => ({ error: 'nf' }) };
-  };
+  // Помощник во вкладке пресета (путь «вставлять по локали» / «⚡ Перенести всё» там)
+  const f = async (url, opts = {}) => { const [status, data] = handle(opts.method || 'GET', url, opts.body ? JSON.parse(opts.body) : undefined); return { ok: status < 300, status, text: async () => (data == null ? '' : JSON.stringify(data)), json: async () => JSON.parse(JSON.stringify(data)) }; };
   const alerts = [];
   const p = tab('ucc.int.iqoption.com', '/presets/121/edit', { fetch: f, confirm: () => true, alert: (m) => alerts.push(m), location: { host: 'ucc.int.iqoption.com', pathname: '/presets/121/edit', reload() {} } });
   p.sandbox.document.querySelector = () => null;
   p.sandbox.document.querySelectorAll = () => [];
+  store['retkit.ucc.u2u.jobs'] = { 'ucc.int.iqoption.com:preset:121': { ts: Date.now(), from: { host: 'studio', label: 'студии', name: 'fraud' }, to: { host: 'ucc.int.iqoption.com', id: '121', kind: 'preset' }, done: {}, locales: [{ code: 'en', subject: 'Hold 2', html: '<p>EN2</p>' }] } };
   for (const fn of p.timers) await fn();
   const all = p.dom.nodes.find((n) => !n.removed && typeof n.onclick === 'function' && /Перенести всё сразу/.test(n.textContent || ''));
   assert.ok(all, 'в пресете появился помощник переноса');
   await all.onclick();
-  assert.ok(!reqs.some((r) => /templates/.test(r.url) && r.method !== 'GET'), 'в письма не пишет — только в пресет');
-  assert.equal(db.locales.find((l) => l.locale.short_name === 'pt').html_body, '<p>PT</p>');
-  assert.equal(db.locales.find((l) => l.locale.short_name === 'en').subject, 'Hold');
-  assert.ok(!reqs.some((r) => /status|register/.test(r.url)), 'Set as Ready не нажимает');
-  assert.match(alerts.at(-1), /Сохранено: 2/);
+  assert.equal(db.locales.find((l) => l.locale.short_name === 'en').html_body, '<p>EN2</p>');
+  assert.match(alerts.at(-1), /Сохранено: 1/);
 }
 
 console.log('✓ ucc bridge: две вкладки через хранилище TM, присутствие, задание, перенос локалей + Subject + отправитель, ошибки по локали, только GET');
